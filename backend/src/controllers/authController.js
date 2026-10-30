@@ -33,7 +33,7 @@ async function login(req, res) {
       ]
     });
 
-    // 2. If not found in User, check if user is mapped via HRMS role assignment (e.g. employee #111252)
+    // 2. If not found in User, check if user is mapped via HRMS role assignment
     if (!user) {
       let hrmsAssignment = await HrmsUserRole.findOne({
         $or: [
@@ -109,19 +109,33 @@ async function login(req, res) {
       });
     }
 
-    // 3. Resolve Role & Effective Permissions (with dynamic overrides)
-    const role = db.roles.find(r => r.id === user.role_id) || { id: user.role_id, name: user.role || 'Student' };
-    const basePermissions = (user.permissions && user.permissions.length > 0)
+    // 3. Resolve Dynamic Role & Permissions from MongoDB Atlas
+    const roleDoc = await Role.findOne({
+      $or: [
+        { name: { $regex: new RegExp(`^${user.role || 'Student'}$`, 'i') } },
+        { name: user.role }
+      ]
+    }).lean();
+
+    const roleName = user.role || roleDoc?.name || 'Student';
+    const rolePermissions = roleDoc?.permissions || ['dashboard', 'all_books'];
+    const userPermissions = (user.permissions && user.permissions.length > 0)
       ? user.permissions
-      : (db.role_permissions[user.role_id] || []);
+      : rolePermissions;
 
-    const userOverrides = db.user_permission_overrides[user._id.toString()] || db.user_permission_overrides[user.id] || {};
-    const effectivePermissions = new Set(basePermissions);
-
-    Object.entries(userOverrides).forEach(([permKey, isGranted]) => {
-      if (isGranted) effectivePermissions.add(permKey);
-      else effectivePermissions.delete(permKey);
-    });
+    let effectivePermissions = new Set(userPermissions);
+    if (user.patron_id) {
+      const hrms = await HrmsUserRole.findOne({ emp_no: user.patron_id }).lean();
+      if (hrms && hrms.individual_overrides) {
+        const overrides = hrms.individual_overrides instanceof Map 
+          ? Object.fromEntries(hrms.individual_overrides)
+          : hrms.individual_overrides;
+        Object.entries(overrides).forEach(([key, val]) => {
+          if (val) effectivePermissions.add(key);
+          else effectivePermissions.delete(key);
+        });
+      }
+    }
 
     const permissionsList = Array.from(effectivePermissions);
 
@@ -130,7 +144,7 @@ async function login(req, res) {
       userId: user._id.toString(),
       email: user.email,
       fullName: user.full_name,
-      role: role.name,
+      role: roleName,
       roleId: user.role_id,
       patronId: user.patron_id || null,
       department: user.department || null,
@@ -153,7 +167,7 @@ async function login(req, res) {
       target_resource: 'SECURITY',
       payload: { 
         email: user.email, 
-        role: role.name, 
+        role: roleName, 
         patron_id: user.patron_id,
         expires_at: new Date(decoded.exp * 1000).toISOString()
       }
@@ -169,7 +183,7 @@ async function login(req, res) {
         id: user._id.toString(),
         full_name: user.full_name,
         email: user.email,
-        role: role.name,
+        role: roleName,
         role_id: user.role_id,
         patron_id: user.patron_id || null,
         department: user.department || null,
@@ -214,19 +228,17 @@ async function me(req, res) {
         return res.status(404).json({ error: 'User account not found' });
       }
 
-      const role = db.roles.find(r => r.id === user.role_id) || { name: user.role };
-
       res.json({
         user: {
           id: user._id.toString(),
           full_name: user.full_name,
           email: user.email,
-          role: role.name,
+          role: user.role || 'Student',
           role_id: user.role_id,
           patron_id: user.patron_id || null,
           department: user.department || null,
           status: user.status || 'Active',
-          permissions: decoded.permissions || user.permissions || []
+          permissions: decoded.permissions || user.permissions || ['dashboard', 'all_books']
         },
         jwt_claims: {
           issuer: decoded.iss,
@@ -301,9 +313,16 @@ async function register(req, res) {
       return res.status(409).json({ error: 'An institutional account with this email already exists. Please sign in.' });
     }
 
-    // Resolve role: Default to Student (id: 4)
+    // Resolve dynamic role from MongoDB Atlas
     const roleName = role ? role.trim() : 'Student';
-    const roleObj = db.roles.find(r => r.name.toLowerCase() === roleName.toLowerCase()) || { id: 4, name: 'Student' };
+    const roleDoc = await Role.findOne({
+      name: { $regex: new RegExp(`^${roleName}$`, 'i') }
+    }).lean();
+
+    const finalRoleName = roleDoc ? roleDoc.name : roleName;
+    const basePermissions = roleDoc?.permissions && roleDoc.permissions.length > 0
+      ? roleDoc.permissions
+      : ['dashboard', 'all_books'];
 
     // Generate unique patron ID (Roll Number) if not provided
     const randomCode = Math.floor(1000 + Math.random() * 9000);
@@ -313,15 +332,14 @@ async function register(req, res) {
 
     // Hash password with bcrypt
     const hashedPassword = await bcrypt.hash(password, 10);
-    const basePermissions = db.role_permissions[roleObj.id] || ['catalog.read', 'circulation.reserve', 'fines.read'];
 
     const newUser = await User.create({
       username: cleanEmail.split('@')[0],
       full_name: full_name.trim(),
       email: cleanEmail,
       password: hashedPassword,
-      role: roleObj.name,
-      role_id: roleObj.id,
+      role: finalRoleName,
+      role_id: finalRoleName.toLowerCase() === 'superadmin' ? 1 : 4,
       phone: phone ? phone.trim() : '',
       patron_id: generatedPatronId,
       department: department ? department.trim() : 'Computer Science & Engineering',

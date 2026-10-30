@@ -5,6 +5,8 @@ const hrmsUri = process.env.HRMS_MONGODB_URI || process.env.MONGODB_URI || 'mong
 let hrmsConnection = null;
 let deptCache = null;
 let deptCacheTime = 0;
+let divCache = null;
+let divCacheTime = 0;
 
 function getHrmsConnection() {
   if (!hrmsConnection || hrmsConnection.readyState === 0) {
@@ -41,6 +43,28 @@ async function getDepartmentMap() {
   }
 }
 
+async function getDivisionMap() {
+  const now = Date.now();
+  if (divCache && (now - divCacheTime < 300000)) {
+    return divCache;
+  }
+
+  try {
+    const conn = getHrmsConnection();
+    await conn.asPromise();
+    const divs = await conn.db.collection('divisions').find({}).toArray();
+    divCache = {};
+    divs.forEach(d => {
+      divCache[d._id.toString()] = d.name || d.division_name || '';
+    });
+    divCacheTime = now;
+    return divCache;
+  } catch (err) {
+    console.error('Failed to load HRMS divisions:', err.message);
+    return divCache || {};
+  }
+}
+
 async function getDepartments() {
   try {
     const conn = getHrmsConnection();
@@ -48,7 +72,8 @@ async function getDepartments() {
     const depts = await conn.db.collection('departments').find({}).toArray();
     return depts.map(d => ({
       id: d._id.toString(),
-      name: d.name || d.department_name || 'General'
+      name: d.name || d.department_name || 'General',
+      code: d.code || ''
     }));
   } catch (err) {
     console.error('Failed to get HRMS departments:', err.message);
@@ -56,11 +81,28 @@ async function getDepartments() {
   }
 }
 
-async function getEmployees({ search = '', department = '', status = 'all', page = 1, limit = 50 } = {}) {
+async function getDivisions() {
+  try {
+    const conn = getHrmsConnection();
+    await conn.asPromise();
+    const divs = await conn.db.collection('divisions').find({}).toArray();
+    return divs.map(d => ({
+      id: d._id.toString(),
+      name: d.name || d.division_name || '',
+      code: d.code || ''
+    }));
+  } catch (err) {
+    console.error('Failed to get HRMS divisions:', err.message);
+    return [];
+  }
+}
+
+async function getEmployees({ search = '', department = '', division = '', status = 'all', page = 1, limit = 50 } = {}) {
   try {
     const conn = getHrmsConnection();
     await conn.asPromise();
     const deptMap = await getDepartmentMap();
+    const divMap = await getDivisionMap();
 
     const query = {};
 
@@ -96,23 +138,28 @@ async function getEmployees({ search = '', department = '', status = 'all', page
 
     const employees = rawEmployees.map(e => {
       const deptName = (e.department_id && deptMap[e.department_id.toString()]) || 'General';
+      const divName = (e.division_id && divMap[e.division_id.toString()]) || '';
       return {
         hrms_id: e._id.toString(),
         emp_no: e.emp_no,
         name: e.employee_name,
+        employee_name: e.employee_name,
         email: e.email || `${e.emp_no.toLowerCase()}@pydah.edu.in`,
         phone: e.phone_number || '',
         gender: e.gender || 'Not specified',
         department: deptName,
+        division: divName,
         is_active: e.is_active !== false,
         source: 'HRMS Database (Direct Live Fetch)'
       };
     });
 
-    // If department filter applied
     let filteredEmployees = employees;
     if (department && department !== 'All') {
-      filteredEmployees = employees.filter(e => e.department.toLowerCase() === department.toLowerCase());
+      filteredEmployees = filteredEmployees.filter(e => e.department.toLowerCase() === department.toLowerCase());
+    }
+    if (division && division !== 'All') {
+      filteredEmployees = filteredEmployees.filter(e => e.division.toLowerCase() === division.toLowerCase());
     }
 
     return {
@@ -132,6 +179,7 @@ async function getEmployeeByEmpNo(empNo) {
     const conn = getHrmsConnection();
     await conn.asPromise();
     const deptMap = await getDepartmentMap();
+    const divMap = await getDivisionMap();
 
     const employee = await conn.db.collection('employees').findOne({
       emp_no: String(empNo).trim()
@@ -140,14 +188,18 @@ async function getEmployeeByEmpNo(empNo) {
     if (!employee) return null;
 
     const deptName = (employee.department_id && deptMap[employee.department_id.toString()]) || 'General';
+    const divName = (employee.division_id && divMap[employee.division_id.toString()]) || '';
+
     return {
       hrms_id: employee._id.toString(),
       emp_no: employee.emp_no,
       name: employee.employee_name,
+      employee_name: employee.employee_name,
       email: employee.email || `${employee.emp_no.toLowerCase()}@pydah.edu.in`,
       phone: employee.phone_number || '',
       gender: employee.gender || 'Not specified',
       department: deptName,
+      division: divName,
       is_active: employee.is_active !== false,
       source: 'HRMS Database'
     };
@@ -161,5 +213,6 @@ module.exports = {
   getHrmsConnection,
   getEmployees,
   getDepartments,
+  getDivisions,
   getEmployeeByEmpNo
 };

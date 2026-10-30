@@ -5,18 +5,6 @@ import {
   X, Tag, Barcode, Copy, Trash2, FolderPlus, Search, List
 } from 'lucide-react';
 
-const DEMO_CATEGORY_KEYWORDS = [
-  'computer science & engineering',
-  'information technology',
-  'artificial intelligence & data science',
-  'electronics & communication',
-  'engineering',
-  'computer science',
-  'electronics',
-  'medical',
-  'management & humanities'
-];
-
 export default function BookCreationView({ 
   books = [],
   onAddBook, 
@@ -30,20 +18,13 @@ export default function BookCreationView({
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [viewingCopiesBook, setViewingCopiesBook] = useState(null);
 
-  // Dynamic Categories State (Zero hardcoding - dynamically created)
+  // Dynamic Categories State (Zero hardcoding - dynamically loaded from MongoDB)
   const [categories, setCategories] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_categories');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const cleaned = parsed.filter(c => {
-            const name = (c.name || (typeof c === 'string' ? c : '')).toLowerCase();
-            return !DEMO_CATEGORY_KEYWORDS.includes(name);
-          });
-          localStorage.setItem('lm_categories', JSON.stringify(cleaned));
-          return cleaned;
-        }
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {}
     return [];
@@ -56,18 +37,17 @@ export default function BookCreationView({
     } catch {}
   }, [categories]);
 
-  // Try fetching backend categories on mount
+  // Fetch all backend dynamic categories from MongoDB Atlas on mount
   useEffect(() => {
     fetch('/api/categories')
       .then(res => res.json())
       .then(data => {
         if (data && Array.isArray(data.categories)) {
-          const nonDemo = data.categories.filter(c => {
-            const name = (c.name || '').toLowerCase();
-            return !DEMO_CATEGORY_KEYWORDS.includes(name);
-          });
-          setCategories(nonDemo);
-          try { localStorage.setItem('lm_categories', JSON.stringify(nonDemo)); } catch {}
+          setCategories(data.categories);
+          try { localStorage.setItem('lm_categories', JSON.stringify(data.categories)); } catch {}
+          if (data.categories.length > 0 && !selectedCategoryName) {
+            setSelectedCategoryName(data.categories[0].name);
+          }
         }
       })
       .catch(() => {});
@@ -342,8 +322,8 @@ export default function BookCreationView({
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
                   {books.map((book, index) => {
-                    const copiesCount = book.total || 1;
-                    const copiesList = book.copies_detail && book.copies_detail.length > 0
+                    const copiesCount = book.total !== undefined ? book.total : (book.total_copies || 1);
+                    const copiesList = Array.isArray(book.copies_detail) && book.copies_detail.length > 0
                       ? book.copies_detail
                       : generateSequentialCopiesList(copiesCount, (book.category_code || (book.category || 'GEN').slice(0, 3)).toUpperCase(), '101');
 
@@ -367,7 +347,7 @@ export default function BookCreationView({
 
                         <td className="py-3 px-3 text-center">
                           <span className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                            {book.available || book.total} / {book.total} Copies
+                            {book.available !== undefined ? book.available : copiesCount} / {copiesCount} Copies
                           </span>
                         </td>
 
@@ -381,12 +361,12 @@ export default function BookCreationView({
                         <td className="py-3 px-3">
                           <div className="flex flex-wrap gap-1 max-w-xs">
                             {copiesList.slice(0, 3).map((cp, idx) => (
-                              <span key={idx} className="font-mono text-[10px] bg-zinc-100 px-1.5 py-0.5 rounded text-zinc-700 border border-zinc-200">
+                              <span key={idx} className="font-mono text-[10px] bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200 font-medium">
                                 {cp.serial_no}
                               </span>
                             ))}
                             {copiesList.length > 3 && (
-                              <span className="text-[10px] text-zinc-400 px-1 py-0.5">
+                              <span className="text-[10px] text-zinc-500 font-medium px-1 py-0.5">
                                 +{copiesList.length - 3} more
                               </span>
                             )}

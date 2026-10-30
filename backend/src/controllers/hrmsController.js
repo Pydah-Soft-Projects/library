@@ -77,8 +77,22 @@ async function getEmployeeByEmpNo(req, res) {
   }
 }
 
+async function getDivisions(req, res) {
+  try {
+    const divisions = await hrmsService.getDivisions();
+    res.json({
+      total: divisions.length,
+      divisions
+    });
+  } catch (err) {
+    console.error('HRMS getDivisions controller error:', err);
+    res.status(500).json({ error: 'Failed to fetch HRMS divisions' });
+  }
+}
+
 module.exports = {
   getEmployees,
   getDepartments,
+  getDivisions,
   getEmployeeByEmpNo
 };

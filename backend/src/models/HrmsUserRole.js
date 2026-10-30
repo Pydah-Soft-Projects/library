@@ -16,6 +16,14 @@ const hrmsUserRoleSchema = new mongoose.Schema(
       type: String,
       default: ''
     },
+    division: {
+      type: String,
+      default: ''
+    },
+    email: {
+      type: String,
+      default: ''
+    },
     role_name: {
       type: String,
       required: true,

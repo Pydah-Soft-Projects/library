@@ -18,28 +18,16 @@ export default function AllBooksView({
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'available' | 'circulating'
   const [viewMode, setViewMode] = useState('table'); // 'table' | 'grid'
   const [editingBook, setEditingBook] = useState(null);
+  const [viewingCopiesBook, setViewingCopiesBook] = useState(null);
 
   const [dynamicCategories, setDynamicCategories] = useState(['All']);
-
-  const DEMO_CATEGORY_KEYWORDS = [
-    'computer science & engineering',
-    'information technology',
-    'artificial intelligence & data science',
-    'electronics & communication',
-    'engineering',
-    'computer science',
-    'electronics',
-    'medical',
-    'management & humanities'
-  ];
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem('lm_categories');
       const savedList = saved ? JSON.parse(saved).map(c => typeof c === 'string' ? c : c.name) : [];
-      const cleanSavedList = savedList.filter(name => !DEMO_CATEGORY_KEYWORDS.includes((name || '').toLowerCase()));
       const bookCats = books.map(b => b.category).filter(Boolean);
-      const uniqueCats = ['All', ...new Set([...cleanSavedList, ...bookCats])];
+      const uniqueCats = ['All', ...new Set([...savedList, ...bookCats])];
       setDynamicCategories(uniqueCats);
     } catch {
       const bookCats = books.map(b => b.category).filter(Boolean);
@@ -85,22 +73,51 @@ export default function AllBooksView({
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900">
             All Books
           </h1>
-          <div className="flex items-center gap-2 text-xs text-zinc-500 mt-1">
-            <span>{books.length} Titles</span>
-            <span>•</span>
-            <span className="text-emerald-700 font-medium">{availableCopies} Available</span>
-            <span>•</span>
-            <span className="text-blue-700 font-medium">{circulatingCopies} On Loan</span>
-          </div>
+          <p className="text-xs text-zinc-500 mt-1">
+            Complete central library catalogue, real-time availability on shelf, and sequential copy serial tracking
+          </p>
         </div>
 
         <button
           onClick={() => onNavigate('book_creation')}
-          className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 self-start sm:self-auto"
+          className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 self-start sm:self-auto shadow-xs"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Create Book</span>
         </button>
+      </div>
+
+      {/* Dynamic Statistics Strip */}
+      <div className="border-t border-b border-zinc-200 grid grid-cols-2 lg:grid-cols-5 py-2 divide-y sm:divide-y-0 sm:divide-x divide-zinc-200 bg-zinc-50/30">
+        <div className="p-4">
+          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">Total Titles</span>
+          <div className="text-2xl font-bold text-zinc-900 mt-0.5">{books.length}</div>
+          <span className="text-[11px] text-zinc-400 mt-0.5 block">Catalogued volumes</span>
+        </div>
+
+        <div className="p-4">
+          <span className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider block">Total Physical Copies</span>
+          <div className="text-2xl font-bold text-blue-900 mt-0.5">{totalCopies}</div>
+          <span className="text-[11px] text-blue-600 mt-0.5 block font-medium">Sequential accessioned copies</span>
+        </div>
+
+        <div className="p-4">
+          <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider block">Available on Shelf</span>
+          <div className="text-2xl font-bold text-emerald-700 mt-0.5">{availableCopies}</div>
+          <span className="text-[11px] text-emerald-600 mt-0.5 block font-medium">{totalCopies > 0 ? Math.round((availableCopies / totalCopies) * 100) : 100}% on rack ready to borrow</span>
+        </div>
+
+        <div className="p-4">
+          <span className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider block">Currently On Loan</span>
+          <div className="text-2xl font-bold text-amber-900 mt-0.5">{circulatingCopies}</div>
+          <span className="text-[11px] text-amber-700 mt-0.5 block">Circulating borrower loans</span>
+        </div>
+
+        <div className="p-4">
+          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">Dynamic Categories</span>
+          <div className="text-2xl font-bold text-zinc-900 mt-0.5">{dynamicCategories.filter(c => c !== 'All').length}</div>
+          <span className="text-[11px] text-zinc-400 mt-0.5 block">Department subjects</span>
+        </div>
       </div>
 
       {/* Flat Toolbar: Search, Filters & View Toggle (No Rounded Card) */}
@@ -214,17 +231,30 @@ export default function AllBooksView({
                 <th className="py-3 px-3">Accession / Barcode</th>
                 <th className="py-3 px-3">Category</th>
                 <th className="py-3 px-3">Shelf & Rack</th>
-                <th className="py-3 px-3 text-center">Availability</th>
+                <th className="py-3 px-3 text-center">Copies In Stock</th>
+                <th className="py-3 px-3">Serial Numbers</th>
                 <th className="py-3 px-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
-              {filteredBooks.map(book => {
-                const isAvailable = (book.available || 0) > 0;
-                const percent = Math.round(((book.available || 0) / (book.total || 1)) * 100);
+              {filteredBooks.map((book, idx) => {
+                const copiesCount = book.total !== undefined ? book.total : (book.total_copies || 1);
+                const availCount = book.available !== undefined ? book.available : copiesCount;
+                const isAvailable = availCount > 0;
+                const percent = Math.round((availCount / copiesCount) * 100);
+
+                const copiesList = Array.isArray(book.copies_detail) && book.copies_detail.length > 0
+                  ? book.copies_detail
+                  : Array.from({ length: copiesCount }, (_, i) => ({
+                      copy_number: i + 1,
+                      serial_no: `SN${(book.category_code || (book.category || 'GEN').slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '')}${i + 1}`,
+                      accession: `${book.accession || 'AC'}${i + 1}`,
+                      barcode: `${book.barcode || 'BC'}${i + 1}`,
+                      status: i < availCount ? 'Available' : 'Issued'
+                    }));
 
                 return (
-                  <tr key={`${book.id || book._id || idx}`} className="hover:bg-zinc-50/70 transition-colors">
+                  <tr key={`${book.id || book._id || 'b'}-${idx}`} className="hover:bg-zinc-50/70 transition-colors">
                     <td className="py-3 px-3">
                       <div className="font-semibold text-zinc-900">{book.title}</div>
                       <div className="text-[11px] text-zinc-400 mt-0.5">{book.author}</div>
@@ -236,7 +266,7 @@ export default function AllBooksView({
                     </td>
 
                     <td className="py-3 px-3 text-zinc-600">
-                      <span className="px-2 py-0.5 rounded text-[11px] bg-zinc-100 text-zinc-700">
+                      <span className="px-2 py-0.5 rounded text-[11px] bg-zinc-100 text-zinc-700 font-medium border border-zinc-200">
                         {book.category}
                       </span>
                     </td>
@@ -249,24 +279,50 @@ export default function AllBooksView({
                     </td>
 
                     <td className="py-3 px-3 text-center">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+                      <span className={`px-2.5 py-0.5 rounded text-[11px] font-semibold border ${
                         isAvailable
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                           : 'bg-rose-50 text-rose-700 border-rose-200'
                       }`}>
-                        {book.available} / {book.total} Copies
+                        {availCount} / {copiesCount} Copies
                       </span>
                       <span className="text-[10px] text-zinc-400 block mt-0.5">
                         {isAvailable ? `${percent}% on shelf` : 'All issued'}
                       </span>
                     </td>
 
+                    <td className="py-3 px-3">
+                      <div className="flex flex-wrap gap-1 max-w-xs items-center">
+                        {copiesList.slice(0, 3).map((cp, cIdx) => (
+                          <span key={cIdx} className="font-mono text-[10px] bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200 font-medium">
+                            {cp.serial_no}
+                          </span>
+                        ))}
+                        {copiesList.length > 3 && (
+                          <button
+                            onClick={() => setViewingCopiesBook({ ...book, copies_detail: copiesList })}
+                            className="text-[10px] text-blue-600 hover:text-blue-800 font-semibold px-1 py-0.5 hover:underline"
+                          >
+                            +{copiesList.length - 3} more
+                          </button>
+                        )}
+                      </div>
+                    </td>
+
                     <td className="py-3 px-3 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => setViewingCopiesBook({ ...book, copies_detail: copiesList })}
+                          className="px-2 py-1 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded text-[11px] font-medium transition-colors"
+                          title="View Copies"
+                        >
+                          Copies
+                        </button>
+
                         {isAvailable ? (
                           <button
                             onClick={() => onSelectIssue(book)}
-                            className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-white rounded text-[11px] font-medium transition-colors flex items-center gap-1"
+                            className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-medium transition-colors flex items-center gap-1 shadow-xs"
                           >
                             <ArrowLeftRight className="w-3 h-3" />
                             <span>Issue</span>
@@ -286,7 +342,7 @@ export default function AllBooksView({
                         <button
                           onClick={() => {
                             if (window.confirm(`Delete "${book.title}" from catalog?`)) {
-                              onDeleteBook(book.id);
+                              onDeleteBook(book.id || book._id);
                             }
                           }}
                           className="p-1 text-zinc-400 hover:text-rose-600 transition-colors"
@@ -428,12 +484,72 @@ export default function AllBooksView({
                 </button>
                 <button
                   type="submit"
-                  className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg font-medium"
+                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium"
                 >
                   Save
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* COPIES INSPECTION MODAL */}
+      {/* ============================================================ */}
+      {viewingCopiesBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-xs">
+          <div className="bg-white rounded-xl border border-zinc-200 shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+              <div>
+                <h3 className="font-bold text-sm text-zinc-900">{viewingCopiesBook.title}</h3>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Accession #{viewingCopiesBook.accession} • {viewingCopiesBook.copies_detail?.length || viewingCopiesBook.total} Physical Copies
+                </p>
+              </div>
+              <button
+                onClick={() => setViewingCopiesBook(null)}
+                className="text-zinc-400 hover:text-zinc-600 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto divide-y divide-zinc-100 border border-zinc-200 rounded-lg">
+              {(viewingCopiesBook.copies_detail || []).map((cp) => (
+                <div key={cp.copy_number || cp.serial_no} className="p-3 flex items-center justify-between text-xs hover:bg-zinc-50/50">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0">
+                      #{cp.copy_number}
+                    </span>
+                    <div>
+                      <div className="font-mono font-bold text-zinc-900">{cp.serial_no}</div>
+                      <div className="text-[10px] text-zinc-400">Accession: {cp.accession} • Barcode: {cp.barcode}</div>
+                    </div>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                    cp.status === 'Available'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}>
+                    {cp.status || 'Available'}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 border-t border-zinc-100 flex items-center justify-between text-xs">
+              <span className="text-[11px] text-zinc-500">
+                Location: <strong>{viewingCopiesBook.shelf || 'Central Stack'}</strong>
+              </span>
+              <button
+                onClick={() => setViewingCopiesBook(null)}
+                className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-medium"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -66,7 +66,7 @@ export default function UserManagementView({ onToast }) {
     emp_no: '',
     verifiedEmployee: null,
     verifying: false,
-    role_name: 'Faculty / Scholar',
+    role_name: 'Student / Patron',
     page_privileges: ['dashboard', 'all_books']
   });
 
@@ -93,6 +93,7 @@ export default function UserManagementView({ onToast }) {
           emp_no: empNo,
           name: assignData.assignments[empNo].employee_name || `Employee #${empNo}`,
           department: assignData.assignments[empNo].department || 'General',
+          division: assignData.assignments[empNo].division || '',
           email: `${empNo.toLowerCase()}@pydah.edu.in`,
           role: assignData.assignments[empNo].role_name,
           page_privileges: assignData.assignments[empNo].page_privileges || ['dashboard', 'all_books'],
@@ -116,6 +117,12 @@ export default function UserManagementView({ onToast }) {
           }
         }
         setRoles(unique);
+        if (unique.length > 0) {
+          setUserForm(prev => ({
+            ...prev,
+            role_name: prev.role_name === 'Faculty / Scholar' ? unique[0].name : prev.role_name
+          }));
+        }
       }
 
       // 3. Fetch HRMS Departments
@@ -200,6 +207,8 @@ export default function UserManagementView({ onToast }) {
 
     const empName = userForm.verifiedEmployee?.name || `Employee #${cleanId}`;
     const empDept = userForm.verifiedEmployee?.department || 'General';
+    const empDiv = userForm.verifiedEmployee?.division || '';
+    const empEmail = userForm.verifiedEmployee?.email || `${cleanId.toLowerCase()}@pydah.edu.in`;
 
     try {
       const res = await fetch('/api/roles/assign', {
@@ -209,6 +218,8 @@ export default function UserManagementView({ onToast }) {
           emp_no: cleanId,
           employee_name: empName,
           department: empDept,
+          division: empDiv,
+          email: empEmail,
           role_name: userForm.role_name,
           page_privileges: userForm.page_privileges
         })
@@ -226,7 +237,8 @@ export default function UserManagementView({ onToast }) {
         emp_no: cleanId,
         name: empName,
         department: empDept,
-        email: `${cleanId.toLowerCase()}@pydah.edu.in`,
+        division: empDiv,
+        email: empEmail,
         role: userForm.role_name,
         page_privileges: userForm.page_privileges,
         assigned_by: 'Superadmin',
@@ -322,21 +334,7 @@ export default function UserManagementView({ onToast }) {
 
     // 3. Persist to backend
     try {
-      // Sync via /api/roles/assign
-      fetch('/api/roles/assign', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          emp_no: empNo,
-          employee_name: privilegeModalUser.name,
-          department: privilegeModalUser.department,
-          role_name: privilegeModalUser.role || 'Faculty / Scholar',
-          page_privileges: updatedPrivileges
-        })
-      }).catch(() => {});
-
-      // Also invoke /api/roles/user-privilege
-      fetch('/api/roles/user-privilege', {
+      const res = await fetch('/api/roles/user-privilege', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -344,9 +342,27 @@ export default function UserManagementView({ onToast }) {
           page_id: pageId,
           is_granted: nextStatus
         })
-      }).catch(() => {});
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Server failed to save privilege');
+      }
+
+      // If the modified user is currently logged in, update session immediately
+      try {
+        const activeUserRaw = localStorage.getItem('lm_jwt_user');
+        if (activeUserRaw) {
+          const activeUser = JSON.parse(activeUserRaw);
+          if (String(activeUser.patron_id || activeUser.username) === String(empNo)) {
+            activeUser.permissions = updatedPrivileges;
+            localStorage.setItem('lm_jwt_user', JSON.stringify(activeUser));
+          }
+        }
+      } catch (_) {}
     } catch (err) {
-      console.warn('Privilege sync background notice:', err);
+      console.error('Failed to save privilege:', err);
+      if (onToast) onToast(`Error saving privilege: ${err.message}`, 'danger');
     }
   };
 
@@ -542,6 +558,7 @@ export default function UserManagementView({ onToast }) {
       (u.name && u.name.toLowerCase().includes(q)) ||
       (u.emp_no && u.emp_no.toLowerCase().includes(q)) ||
       (u.department && u.department.toLowerCase().includes(q)) ||
+      (u.division && u.division.toLowerCase().includes(q)) ||
       (u.email && u.email.toLowerCase().includes(q)) ||
       (u.role && u.role.toLowerCase().includes(q))
     );
@@ -722,7 +739,7 @@ export default function UserManagementView({ onToast }) {
                 <thead>
                   <tr className="border-b border-zinc-200 bg-zinc-50/50 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
                     <th className="py-3 px-3">HRMS ID & Member</th>
-                    <th className="py-3 px-3">Department & Email</th>
+                    <th className="py-3 px-3">Department & Division</th>
                     <th className="py-3 px-3">Assigned Role</th>
                     <th className="py-3 px-3">Allowed Page Privileges</th>
                     <th className="py-3 px-3 text-right">Actions</th>
@@ -750,10 +767,13 @@ export default function UserManagementView({ onToast }) {
                           </div>
                         </td>
 
-                        {/* Department & Email */}
+                        {/* Department & Division */}
                         <td className="py-3 px-3 text-zinc-600">
-                          <div>{user.department}</div>
-                          <span className="text-[11px] text-zinc-400 font-mono block mt-0.5">{user.email}</span>
+                          <div className="font-medium text-zinc-900">{user.department || 'General Department'}</div>
+                          {user.division && (
+                            <div className="text-[11px] text-zinc-500 font-medium">{user.division}</div>
+                          )}
+                          <span className="text-[10px] text-zinc-400 font-mono block mt-0.5">{user.email}</span>
                         </td>
 
                         {/* Role */}
@@ -1008,23 +1028,33 @@ export default function UserManagementView({ onToast }) {
 
               {/* Verified Employee Preview Card */}
               {userForm.verifiedEmployee ? (
-                <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-lg space-y-1">
+                <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-lg space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-xs text-emerald-950 flex items-center gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{userForm.verifiedEmployee.name}</span>
+                      <span>{userForm.verifiedEmployee.name || userForm.verifiedEmployee.employee_name}</span>
                     </span>
                     <span className="font-mono text-[10px] bg-white px-2 py-0.5 rounded border border-emerald-200 text-emerald-800">
                       #{userForm.verifiedEmployee.emp_no}
                     </span>
                   </div>
-                  <div className="text-[11px] text-emerald-800">
-                    Dept: <strong>{userForm.verifiedEmployee.department}</strong> • Email: {userForm.verifiedEmployee.email}
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-emerald-900 pt-1 border-t border-emerald-200/60">
+                    <div>
+                      <span className="text-emerald-700 text-[10px] block font-semibold uppercase">Division:</span>
+                      <strong>{userForm.verifiedEmployee.division || 'Main Campus Division'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-emerald-700 text-[10px] block font-semibold uppercase">Department:</span>
+                      <strong>{userForm.verifiedEmployee.department || 'General'}</strong>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-emerald-700 font-mono pt-0.5">
+                    Email: {userForm.verifiedEmployee.email || `${userForm.verifiedEmployee.emp_no}@pydah.edu.in`}
                   </div>
                 </div>
               ) : userForm.emp_no && !userForm.verifying && (
                 <div className="text-[11px] text-zinc-500 italic">
-                  Click "Verify ID" to auto-fetch details from HRMS, or continue to map directly.
+                  Click "Verify ID" to auto-fetch name, division, and department from live HRMS.
                 </div>
               )}
 

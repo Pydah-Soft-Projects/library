@@ -15,70 +15,25 @@ const PAGE_PRIVILEGES = [
   { id: 'settings', name: 'Settings', description: 'Library lending policies, fine tariffs, and system settings' }
 ];
 
-// Initial baseline roles seeded into database if not present
-const INITIAL_BASELINE_ROLES = [
-  {
-    name: 'Superadmin',
-    description: 'Sovereign governance, dynamic capability delegation & security audits',
-    color: 'zinc',
-    is_system: true,
-    permissions: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
-  },
-  {
-    name: 'Chief Librarian',
-    description: 'Acquisitions, catalog management, membership tiers, and reporting',
-    color: 'purple',
-    is_system: false,
-    permissions: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'settings']
-  },
-  {
-    name: 'Front-Desk Sub-staff',
-    description: 'Circulation desk operations, checkout/returns, and fine receipt collection',
-    color: 'blue',
-    is_system: false,
-    permissions: ['dashboard', 'all_books', 'book_issues_returns']
-  },
-  {
-    name: 'Faculty / Scholar',
-    description: 'Faculty patron membership: extended borrowing quota',
-    color: 'emerald',
-    is_system: false,
-    permissions: ['dashboard', 'all_books']
-  },
-  {
-    name: 'Student / Patron',
-    description: 'Patron end-user self-service search and personal loan tracker',
-    color: 'cyan',
-    is_system: false,
-    permissions: ['dashboard', 'all_books']
-  }
-];
-
-let rolesSeeded = false;
+let superadminSeeded = false;
 async function ensureSeedRoles() {
-  if (rolesSeeded) return;
+  if (superadminSeeded) return;
   try {
-    for (const r of INITIAL_BASELINE_ROLES) {
-      const exists = await Role.findOne({ name: { $regex: new RegExp(`^${r.name}$`, 'i') } });
-      if (!exists) {
-        await Role.create({
-          name: r.name,
-          description: r.description,
-          color: r.color,
-          permissions: r.permissions,
-          is_system: r.is_system
-        });
-      } else if (r.name.toLowerCase() === 'superadmin' && !exists.is_system) {
-        exists.is_system = true;
-        await exists.save();
-      } else if (r.name.toLowerCase() !== 'superadmin' && exists.is_system) {
-        exists.is_system = false;
-        await exists.save();
-      }
+    // ONLY ensure Superadmin root role exists - NEVER recreate roles deleted by user
+    const superadmin = await Role.findOne({ name: { $regex: /^superadmin$/i } });
+    if (!superadmin) {
+      await Role.create({
+        name: 'Superadmin',
+        description: 'Sovereign governance, dynamic capability delegation & security audits',
+        color: 'zinc',
+        is_system: true,
+        permissions: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
+      });
+      console.log('🛡️ Ensured root Superadmin role exists in database');
     }
-    rolesSeeded = true;
+    superadminSeeded = true;
   } catch (err) {
-    console.error('Error ensuring baseline roles in DB:', err.message);
+    console.error('Error ensuring Superadmin role in DB:', err.message);
   }
 }
 
@@ -218,6 +173,19 @@ async function updateRole(req, res) {
     // If role name changed, update any active user assignments
     if (name && name.trim() !== oldName) {
       await HrmsUserRole.updateMany({ role_name: oldName }, { role_name: name.trim() });
+      await User.updateMany({ role: oldName }, { role: name.trim() });
+    }
+
+    // Propagate updated role permissions to all users assigned to this role
+    if (Array.isArray(page_privileges)) {
+      await HrmsUserRole.updateMany(
+        { role_name: role.name },
+        { $set: { page_privileges: role.permissions } }
+      );
+      await User.updateMany(
+        { role: role.name },
+        { $set: { permissions: role.permissions } }
+      );
     }
 
     res.json({
@@ -285,7 +253,7 @@ async function deleteRole(req, res) {
 // Assign Role and Page Privileges to an HRMS User (without storing user records locally)
 async function assignRoleToHrmsUser(req, res) {
   try {
-    const { emp_no, role_name, employee_name, department, page_privileges } = req.body || {};
+    const { emp_no, role_name, employee_name, department, division, email, page_privileges } = req.body || {};
 
     if (!emp_no || !role_name) {
       return res.status(400).json({ error: 'emp_no and role_name are required' });
@@ -308,6 +276,8 @@ async function assignRoleToHrmsUser(req, res) {
       assignment.role_name = roleDoc ? roleDoc.name : cleanRoleName;
       assignment.employee_name = employee_name || assignment.employee_name || '';
       assignment.department = department || assignment.department || '';
+      assignment.division = division || assignment.division || '';
+      if (email) assignment.email = email.trim().toLowerCase();
       assignment.page_privileges = assignedPages;
       assignment.assigned_by = req.user?.fullName || 'Superadmin';
       assignment.assigned_at = new Date();
@@ -317,6 +287,8 @@ async function assignRoleToHrmsUser(req, res) {
         emp_no: cleanEmpNo,
         employee_name: employee_name || '',
         department: department || '',
+        division: division || '',
+        email: email ? email.trim().toLowerCase() : '',
         role_name: roleDoc ? roleDoc.name : cleanRoleName,
         page_privileges: assignedPages,
         assigned_by: req.user?.fullName || 'Superadmin'
@@ -327,22 +299,43 @@ async function assignRoleToHrmsUser(req, res) {
     try {
       const isSuper = cleanRoleName.toLowerCase() === 'superadmin';
       const defaultHash = await bcrypt.hash('superadmin123', 10);
-      await User.findOneAndUpdate(
-        { $or: [{ username: cleanEmpNo }, { patron_id: cleanEmpNo }] },
-        {
-          username: cleanEmpNo,
+      const userEmail = email ? email.trim().toLowerCase() : `${cleanEmpNo.toLowerCase()}@pydah.edu.in`;
+      let userDoc = await User.findOne({
+        $or: [
+          { username: cleanEmpNo.toLowerCase() },
+          { patron_id: cleanEmpNo },
+          { email: userEmail }
+        ]
+      });
+
+      if (!userDoc) {
+        userDoc = new User({
+          username: cleanEmpNo.toLowerCase(),
           full_name: employee_name || `Employee #${cleanEmpNo}`,
-          email: `${cleanEmpNo.toLowerCase()}@pydah.edu.in`,
+          email: userEmail,
           role: roleDoc ? roleDoc.name : cleanRoleName,
           role_id: isSuper ? 1 : 2,
           patron_id: cleanEmpNo,
           department: department || 'General',
+          division: division || '',
           status: 'Active',
           permissions: assignedPages,
           password: defaultHash
-        },
-        { upsert: true, new: true }
-      );
+        });
+      } else {
+        userDoc.username = cleanEmpNo.toLowerCase();
+        userDoc.full_name = employee_name || userDoc.full_name;
+        userDoc.role = roleDoc ? roleDoc.name : cleanRoleName;
+        userDoc.role_id = isSuper ? 1 : 2;
+        userDoc.patron_id = cleanEmpNo;
+        userDoc.department = department || userDoc.department;
+        userDoc.division = division || userDoc.division;
+        userDoc.email = userEmail;
+        userDoc.status = 'Active';
+        userDoc.permissions = assignedPages;
+        if (!userDoc.password) userDoc.password = defaultHash;
+      }
+      await userDoc.save();
     } catch (upsertErr) {
       console.warn('Could not sync user to Mongo users collection:', upsertErr.message);
     }
@@ -396,6 +389,17 @@ async function setUserPagePrivilegeOverride(req, res) {
     assignment.page_privileges = Array.from(currentPrivileges);
     await assignment.save();
 
+    // CRITICAL: Synchronize permissions to User collection so login and views update immediately
+    await User.updateMany(
+      {
+        $or: [
+          { patron_id: cleanEmpNo },
+          { username: cleanEmpNo.toLowerCase() }
+        ]
+      },
+      { $set: { permissions: assignment.page_privileges } }
+    );
+
     logAudit({
       actor_id: req.user?.userId || 'SUPERADMIN',
       action_key: 'system.user_privilege.override',
@@ -429,7 +433,8 @@ async function getHrmsUserRoles(req, res) {
         emp_no: a.emp_no,
         name: a.employee_name || `Employee #${a.emp_no}`,
         department: a.department || 'General',
-        email: `${String(a.emp_no).toLowerCase()}@pydah.edu.in`,
+        division: a.division || '',
+        email: a.email || `${String(a.emp_no).toLowerCase()}@pydah.edu.in`,
         role: a.role_name,
         page_privileges: a.page_privileges || [],
         assigned_by: a.assigned_by,
@@ -485,6 +490,7 @@ module.exports = {
   setUserPagePrivilegeOverride,
   getHrmsUserRoles,
   deleteHrmsUserAssignment,
+  ensureSeedRoles,
   DEFAULT_SYSTEM_ROLES: INITIAL_BASELINE_ROLES,
   PAGE_PRIVILEGES
 };

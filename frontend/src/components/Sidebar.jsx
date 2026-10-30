@@ -11,6 +11,7 @@ export default function Sidebar({
   currentRole, 
   setCurrentRole, 
   currentUser,
+  roles: propRoles = [],
   isCollapsed,
   setIsCollapsed,
   booksCount,
@@ -20,6 +21,22 @@ export default function Sidebar({
   onToast 
 }) {
   const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
+  const [internalRoles, setInternalRoles] = useState([]);
+
+  React.useEffect(() => {
+    if (propRoles && propRoles.length > 0) {
+      setInternalRoles(propRoles);
+    } else {
+      fetch('/api/roles')
+        .then(res => res.json())
+        .then(data => {
+          if (data && Array.isArray(data.roles)) {
+            setInternalRoles(data.roles);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [propRoles]);
 
   // The 6 requested sidebar pages with simple naming
   const navItems = [
@@ -71,14 +88,32 @@ export default function Sidebar({
     return false;
   };
 
-  const roles = [
-    { id: 'superadmin', title: 'Superadmin Console', tag: 'Sovereign' },
-    { id: 'librarian', title: 'Chief Librarian', tag: 'Acquisitions' },
-    { id: 'substaff', title: 'Circulation Desk Staff', tag: 'Desk Ops' },
-    { id: 'student', title: 'Student / Patron', tag: 'Patron' }
+  const dynamicRoleList = (internalRoles.length > 0 ? internalRoles : propRoles).map(r => ({
+    id: r.name || r.id,
+    title: r.name || r.title,
+    tag: r.is_system ? 'System' : 'Dynamic Role',
+    page_privileges: r.page_privileges || r.permissions || []
+  }));
+
+  const roles = dynamicRoleList.length > 0 ? dynamicRoleList : [
+    { id: 'Superadmin', title: 'Superadmin', tag: 'System', page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings'] }
   ];
 
-  const activeRoleObj = roles.find(r => r.id === currentRole) || roles[0];
+  const activeRoleObj = roles.find(r => 
+    r.id?.toLowerCase() === (currentRole || '').toLowerCase() ||
+    r.title?.toLowerCase() === (currentRole || '').toLowerCase()
+  ) || roles[0];
+
+  const isSuperadmin = (currentRole || '').toLowerCase() === 'superadmin' || 
+                       (currentUser?.role || '').toLowerCase() === 'superadmin';
+
+  const effectivePermissions = isSuperadmin
+    ? ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
+    : (Array.isArray(currentUser?.permissions) && currentUser.permissions.length > 0
+        ? currentUser.permissions
+        : (activeRoleObj?.page_privileges || ['dashboard', 'all_books']));
+
+  const allowedNavItems = navItems.filter(item => isSuperadmin || effectivePermissions.includes(item.id));
 
   const handleRoleSelect = (r) => {
     setCurrentRole(r.id);
@@ -141,9 +176,9 @@ export default function Sidebar({
           </div>
         )}
 
-        {/* Navigation List */}
+        {/* Navigation List - Filtered by User Privileges */}
         <nav className="p-3 space-y-1">
-          {navItems.map(item => {
+          {allowedNavItems.map(item => {
             const Icon = item.icon;
             const active = isTabActive(item.id);
 
@@ -195,11 +230,17 @@ export default function Sidebar({
         {/* Role Switcher Button */}
         <div className="relative">
           <button
-            onClick={() => setRoleDropdownOpen(!roleDropdownOpen)}
-            className={`w-full rounded-xl border border-zinc-200/80 bg-zinc-50/70 hover:bg-zinc-100 transition-all ${
+            onClick={() => {
+              if (isSuperadmin) {
+                setRoleDropdownOpen(!roleDropdownOpen);
+              }
+            }}
+            className={`w-full rounded-xl border border-zinc-200/80 bg-zinc-50/70 transition-all ${
+              isSuperadmin ? 'hover:bg-zinc-100 cursor-pointer' : 'cursor-default'
+            } ${
               isCollapsed ? 'p-2 flex items-center justify-center' : 'p-2.5 flex items-center justify-between text-left'
             }`}
-            title="Switch User Role"
+            title={isSuperadmin ? 'Switch Persona (Superadmin only)' : 'Assigned Institutional Account'}
           >
             <div className="flex items-center gap-2.5 overflow-hidden">
               <div className="w-7 h-7 rounded-lg bg-zinc-200 text-zinc-800 flex items-center justify-center text-xs font-bold shrink-0">
@@ -211,21 +252,21 @@ export default function Sidebar({
                     {currentUser?.full_name || activeRoleObj.title}
                   </div>
                   <div className="text-[10px] text-zinc-400 truncate">
-                    {currentUser?.patron_id || activeRoleObj.tag}
+                    {currentUser?.role || activeRoleObj.title} • {currentUser?.patron_id || activeRoleObj.tag}
                   </div>
                 </div>
               )}
             </div>
 
-            {!isCollapsed && (
+            {!isCollapsed && isSuperadmin && (
               <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white text-zinc-600 border border-zinc-200 shrink-0">
                 Switch
               </span>
             )}
           </button>
 
-          {/* Role Dropdown Popup */}
-          {roleDropdownOpen && (
+          {/* Role Dropdown Popup (Superadmin only) */}
+          {roleDropdownOpen && isSuperadmin && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setRoleDropdownOpen(false)} />
               <div className={`absolute bottom-full mb-2 rounded-2xl bg-white border border-zinc-200 shadow-xl z-50 p-2 text-xs space-y-1 ${

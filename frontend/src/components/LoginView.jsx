@@ -36,7 +36,7 @@ export default function LoginView({ onLoginSuccess, onToast }) {
       const data = await response.json();
 
       if (!response.ok) {
-        // Fallback: Check if this user is a mapped HRMS account (e.g. employee #111252)
+        // Fallback: Check if this user is a mapped HRMS account
         const cleanId = identifier.trim().toLowerCase();
         let found = null;
         try {
@@ -51,16 +51,6 @@ export default function LoginView({ onLoginSuccess, onToast }) {
           }
         } catch (_) {}
 
-        if (!found && cleanId === '111252') {
-          found = {
-            emp_no: '111252',
-            name: 'Employee #111252',
-            email: '111252@pydah.edu.in',
-            role: 'Superadmin',
-            page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
-          };
-        }
-
         if (found) {
           const syntheticUser = {
             id: found.id || `hrms-${found.emp_no}`,
@@ -74,7 +64,6 @@ export default function LoginView({ onLoginSuccess, onToast }) {
             permissions: found.page_privileges || ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
           };
           const syntheticToken = `token_${Date.now()}`;
-          if (onToast) onToast(`Welcome back, ${syntheticUser.full_name}!`, 'success');
           onLoginSuccess(syntheticToken, syntheticUser);
           return;
         }
@@ -84,8 +73,7 @@ export default function LoginView({ onLoginSuccess, onToast }) {
         return;
       }
 
-      // Success
-      if (onToast) onToast(`Welcome back, ${data.user?.full_name || 'Administrator'}!`, 'success');
+      // Success - handled by App.jsx handleLoginSuccess
       onLoginSuccess(data.token, data.user);
     } catch (err) {
       setErrorMessage(`Cannot connect to server (${err.message}). Please ensure backend is running.`);

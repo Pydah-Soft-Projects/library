@@ -15,6 +15,7 @@ import SettingsView from './components/SettingsView';
 // Modals & Footer
 import { UpiModal, WaiveModal } from './components/UpiModal';
 import Footer from './components/Footer';
+import { X, ShieldAlert } from 'lucide-react';
 
 const INITIAL_LOANS = [];
 const INITIAL_FINES = [];
@@ -53,28 +54,60 @@ export default function App() {
   const [isJwtModalOpen, setIsJwtModalOpen] = useState(false);
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [roles, setRoles] = useState([]);
   const [currentRole, setCurrentRole] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_jwt_user');
       if (saved) {
         const u = JSON.parse(saved);
-        const r = (u.role || '').toLowerCase();
-        if (r.includes('admin')) return 'superadmin';
-        if (r.includes('librarian')) return 'librarian';
-        if (r.includes('staff')) return 'substaff';
-        return 'student';
+        return u.role || 'Superadmin';
       }
     } catch {}
-    return 'student';
+    return 'Superadmin';
   });
 
-  const [currentTab, setCurrentTab] = useState(() => {
+  const getInitialTab = () => {
     try {
-      const saved = localStorage.getItem('lm_jwt_user');
-      if (saved) return 'dashboard';
+      const hash = window.location.hash.replace(/^#\/?/, '').trim();
+      const validTabs = ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings'];
+      if (hash && validTabs.includes(hash)) {
+        return hash;
+      }
+      const savedTab = localStorage.getItem('lm_current_tab');
+      if (savedTab && validTabs.includes(savedTab)) {
+        return savedTab;
+      }
     } catch {}
     return 'dashboard';
-  });
+  };
+
+  const [currentTab, setCurrentTab] = useState(getInitialTab);
+
+  // Synchronize currentTab with URL Hash and LocalStorage for seamless browser reload support
+  useEffect(() => {
+    if (currentTab) {
+      if (window.location.hash !== `#${currentTab}`) {
+        window.location.hash = `#${currentTab}`;
+      }
+      try {
+        localStorage.setItem('lm_current_tab', currentTab);
+      } catch {}
+    }
+  }, [currentTab]);
+
+  // Listen to browser navigation (Back, Forward, Direct URL hash changes)
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace(/^#\/?/, '').trim();
+      const validTabs = ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings'];
+      if (hash && validTabs.includes(hash) && hash !== currentTab) {
+        setCurrentTab(hash);
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [currentTab]);
 
   const [currentStudentId, setCurrentStudentId] = useState(() => {
     try {
@@ -87,25 +120,6 @@ export default function App() {
     return '';
   });
 
-  const DEMO_BOOK_KEYWORDS = [
-    'higher engineering mathematics',
-    'operating system concepts',
-    'database system concepts',
-    'digital signal processing',
-    'robbins & cotran',
-    'grewal',
-    'silberschatz',
-    'saketh',
-    'text book',
-    'modern compiler design',
-    'compiler design',
-    'dick grune',
-    'grune',
-    'proakis',
-    'manolakis',
-    'vinay kumar'
-  ];
-
   // Books state loaded live from MongoDB Atlas backend
   const [books, setBooks] = useState(() => {
     try {
@@ -113,27 +127,19 @@ export default function App() {
       if (saved) {
         const list = JSON.parse(saved);
         if (Array.isArray(list)) {
-          const cleaned = list
-            .filter(b => {
-              const titleLow = (b.title || '').toLowerCase();
-              const authorLow = (b.author || '').toLowerCase();
-              return !DEMO_BOOK_KEYWORDS.some(kw => titleLow.includes(kw) || authorLow.includes(kw));
-            })
-            .map(b => ({
-              ...b,
-              accession: String(b.accession || '').replace(/[\s\-_]/g, ''),
-              barcode: String(b.barcode || '').replace(/[\s\-_]/g, ''),
-              copies_detail: Array.isArray(b.copies_detail)
-                ? b.copies_detail.map(cp => ({
-                    ...cp,
-                    serial_no: String(cp.serial_no || '').replace(/[\s\-_]/g, ''),
-                    accession: String(cp.accession || '').replace(/[\s\-_]/g, ''),
-                    barcode: String(cp.barcode || '').replace(/[\s\-_]/g, '')
-                  }))
-                : b.copies_detail
-            }));
-          localStorage.setItem('lm_books', JSON.stringify(cleaned));
-          return cleaned;
+          return list.map(b => ({
+            ...b,
+            accession: String(b.accession || '').replace(/[\s\-_]/g, ''),
+            barcode: String(b.barcode || '').replace(/[\s\-_]/g, ''),
+            copies_detail: Array.isArray(b.copies_detail)
+              ? b.copies_detail.map(cp => ({
+                  ...cp,
+                  serial_no: String(cp.serial_no || '').replace(/[\s\-_]/g, ''),
+                  accession: String(cp.accession || '').replace(/[\s\-_]/g, ''),
+                  barcode: String(cp.barcode || '').replace(/[\s\-_]/g, '')
+                }))
+              : b.copies_detail
+          }));
         }
       }
     } catch {}
@@ -176,41 +182,85 @@ export default function App() {
     }
   });
 
-  // Sync books live from backend on launch, stripping out legacy demo seed titles
+  // Fetch all dynamic roles from MongoDB Atlas backend
+  useEffect(() => {
+    fetch('/api/roles')
+      .then(res => res.json())
+      .then(data => {
+        if (data && Array.isArray(data.roles)) {
+          setRoles(data.roles);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch all registered patrons/users live from MongoDB Atlas backend
+  useEffect(() => {
+    fetch('/api/users')
+      .then(res => res.json())
+      .then(data => {
+        if (data && Array.isArray(data.users)) {
+          setStudents(data.users);
+          try { localStorage.setItem('lm_students', JSON.stringify(data.users)); } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Sync books live from MongoDB Atlas backend without any keyword filtering
   useEffect(() => {
     fetch('/api/books')
       .then(res => res.json())
       .then(data => {
         if (data && data.books && Array.isArray(data.books)) {
-          const nonDemoBooks = data.books.filter(b => {
-            const titleLow = (b.title || '').toLowerCase();
-            const authorLow = (b.author || '').toLowerCase();
-            return !DEMO_BOOK_KEYWORDS.some(kw => titleLow.includes(kw) || authorLow.includes(kw));
-          }).map(b => ({
-            id: b.id || b._id,
-            title: b.title,
-            author: b.author,
-            isbn: b.isbn,
-            category: b.category,
-            category_code: (b.category_code || '').replace(/[\s\-_]/g, ''),
-            accession: String(b.accession || b.accession_no || `AC${b.id}`).replace(/[\s\-_]/g, ''),
-            barcode: String(b.barcode || `BC${b.id}`).replace(/[\s\-_]/g, ''),
-            shelf: b.shelf || b.shelf_location || 'Central Stack',
-            total: b.total !== undefined ? b.total : (b.total_copies || 1),
-            available: b.available !== undefined ? b.available : (b.available_copies || 1),
-            publisher: b.publisher,
-            edition: b.edition,
-            copies_detail: Array.isArray(b.copies_detail)
-              ? b.copies_detail.map(cp => ({
-                  ...cp,
-                  serial_no: String(cp.serial_no || '').replace(/[\s\-_]/g, ''),
-                  accession: String(cp.accession || '').replace(/[\s\-_]/g, ''),
-                  barcode: String(cp.barcode || '').replace(/[\s\-_]/g, '')
-                }))
-              : []
-          }));
-          setBooks(nonDemoBooks);
-          try { localStorage.setItem('lm_books', JSON.stringify(nonDemoBooks)); } catch {}
+          const loadedBooks = data.books.map(b => {
+            const copyCount = b.total !== undefined ? b.total : (b.total_copies || 1);
+            const catCode = (b.category_code || (b.category || 'GEN').slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'GEN';
+            const baseAcc = String(b.accession || b.accession_no || `AC${b.id}`).replace(/[\s\-_]/g, '');
+            const baseBar = String(b.barcode || `BC${b.id}`).replace(/[\s\-_]/g, '');
+
+            // Ensure copies_detail has valid serial numbers and copies count
+            let copiesDetail = [];
+            if (Array.isArray(b.copies_detail) && b.copies_detail.length > 0) {
+              copiesDetail = b.copies_detail.map((cp, idx) => ({
+                ...cp,
+                copy_number: cp.copy_number || idx + 1,
+                serial_no: String(cp.serial_no || `SN${catCode}${idx + 1}`).replace(/[\s\-_]/g, ''),
+                accession: String(cp.accession || `${baseAcc}${idx + 1}`).replace(/[\s\-_]/g, ''),
+                barcode: String(cp.barcode || `${baseBar}${idx + 1}`).replace(/[\s\-_]/g, ''),
+                status: cp.status || 'Available'
+              }));
+            } else {
+              copiesDetail = Array.from({ length: copyCount }, (_, idx) => ({
+                copy_number: idx + 1,
+                serial_no: `SN${catCode}${idx + 1}`,
+                accession: `${baseAcc}${idx + 1}`,
+                barcode: `${baseBar}${idx + 1}`,
+                status: idx < (b.available !== undefined ? b.available : copyCount) ? 'Available' : 'Issued'
+              }));
+            }
+
+            return {
+              id: b.id || b._id,
+              _id: b.id || b._id,
+              title: b.title,
+              author: b.author,
+              isbn: b.isbn,
+              category: b.category,
+              category_code: catCode,
+              accession: baseAcc,
+              barcode: baseBar,
+              shelf: b.shelf || b.shelf_location || 'Central Stack',
+              total: copyCount,
+              available: b.available !== undefined ? b.available : (b.available_copies !== undefined ? b.available_copies : copyCount),
+              publisher: b.publisher,
+              edition: b.edition,
+              copies_detail: copiesDetail
+            };
+          });
+
+          setBooks(loadedBooks);
+          try { localStorage.setItem('lm_books', JSON.stringify(loadedBooks)); } catch {}
         }
       })
       .catch(() => {});
@@ -232,25 +282,56 @@ export default function App() {
     try { localStorage.setItem('lm_reservations', JSON.stringify(reservations)); } catch {}
   }, [reservations]);
 
-  // Sync enrolled patrons from backend API (live from MongoDB)
+  // Sync active circulation loans live from MongoDB Atlas backend
   useEffect(() => {
-    fetch('/api/users')
+    fetch('/api/circulation/loans')
       .then(res => res.json())
       .then(data => {
-        if (data && data.users && Array.isArray(data.users)) {
-          const liveStudents = data.users.map(u => ({
-            id: u.patron_id || u.rollNo || u.id,
-            name: u.full_name || u.name,
-            rollNo: u.patron_id || u.rollNo || u.id,
-            email: u.email,
-            department: u.department || 'General',
-            phone: u.phone || '',
-            role: u.role,
-            status: u.status || 'Active',
-            borrowedCount: u.borrowedCount || 0,
-            fineBalance: u.fineBalance || 0
-          }));
-          setStudents(liveStudents);
+        if (data && Array.isArray(data.loans)) {
+          setLoans(data.loans);
+          try { localStorage.setItem('lm_loans', JSON.stringify(data.loans)); } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Sync fine ledgers live from MongoDB Atlas backend
+  useEffect(() => {
+    fetch('/api/fines')
+      .then(res => res.json())
+      .then(data => {
+        if (data && Array.isArray(data.fines)) {
+          setFines(data.fines);
+          try { localStorage.setItem('lm_fines', JSON.stringify(data.fines)); } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Sync hold reservations live from MongoDB Atlas backend
+  useEffect(() => {
+    fetch('/api/circulation/reservations')
+      .then(res => res.json())
+      .then(data => {
+        if (data && Array.isArray(data.reservations)) {
+          setReservations(data.reservations);
+          try { localStorage.setItem('lm_reservations', JSON.stringify(data.reservations)); } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Sync security audit trails live from MongoDB Atlas backend
+  useEffect(() => {
+    fetch('/api/audit-logs')
+      .then(res => res.json())
+      .then(data => {
+        if (data && Array.isArray(data.logs) && data.logs.length > 0) {
+          setAuditLogs(data.logs.map(l => ({
+            id: l.id,
+            time: l.timestamp ? new Date(l.timestamp).toLocaleTimeString('en-IN') : 'Recent',
+            text: `${(l.action_key || 'SYSTEM').toUpperCase()}: ${l.target_resource || ''} ${l.payload ? JSON.stringify(l.payload) : ''}`
+          })));
         }
       })
       .catch(() => {});
@@ -265,11 +346,15 @@ export default function App() {
   const [prefilledBookForIssue, setPrefilledBookForIssue] = useState(null);
   const [toasts, setToasts] = useState([]);
 
+  const removeToast = (id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
+
   const addToast = (message, type = 'info') => {
-    const id = Date.now();
+    const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
+      removeToast(id);
     }, 4500);
   };
 
@@ -285,17 +370,8 @@ export default function App() {
     localStorage.setItem('lm_jwt_token', token);
     localStorage.setItem('lm_jwt_user', JSON.stringify(user));
 
-    const roleLower = (user.role || '').toLowerCase();
-    if (roleLower.includes('admin') || roleLower.includes('superadmin')) {
-      setCurrentRole('superadmin');
-    } else if (roleLower.includes('librarian')) {
-      setCurrentRole('librarian');
-    } else if (roleLower.includes('staff')) {
-      setCurrentRole('substaff');
-    } else {
-      setCurrentRole('student');
-    }
-    setCurrentTab('dashboard');
+    setCurrentRole(user.role || 'Superadmin');
+    setCurrentTab(getInitialTab());
 
     if (user.patron_id) {
       setCurrentStudentId(user.patron_id);
@@ -382,23 +458,49 @@ export default function App() {
   const overdueFinesCount = loans.filter(l => l.status === 'Overdue').length;
   const totalPendingFines = fines.filter(f => f.status === 'Unpaid').reduce((sum, f) => sum + Number(f.amount), 0);
 
+  // Compute effective permissions for currently authenticated user / persona
+  const isSuperadmin = (currentRole || '').toLowerCase() === 'superadmin' || 
+                       (currentUser?.role || '').toLowerCase() === 'superadmin';
+
+  const matchedRole = roles.find(r => 
+    (r.name || r.id || '').toLowerCase() === (currentRole || currentUser?.role || '').toLowerCase()
+  );
+
+  const effectivePermissions = isSuperadmin
+    ? ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
+    : (Array.isArray(currentUser?.permissions) && currentUser.permissions.length > 0
+        ? currentUser.permissions
+        : (matchedRole?.page_privileges || matchedRole?.permissions || ['dashboard', 'all_books']));
+
+  const hasPagePrivilege = (pageId) => isSuperadmin || effectivePermissions.includes(pageId);
+
+  // Automatically redirect user if currentTab is outside their permitted page privileges
+  useEffect(() => {
+    if (!isSuperadmin && effectivePermissions.length > 0) {
+      const baseTab = currentTab === 'admin_dashboard' || currentTab === 'student_dashboard' ? 'dashboard'
+        : currentTab === 'admin_books' || currentTab === 'admin_in_library' || currentTab === 'student_catalog' ? 'all_books'
+        : currentTab === 'admin_circulation' || currentTab === 'admin_checked_out' || currentTab === 'admin_fines' || currentTab === 'student_my_books' || currentTab === 'student_my_fines' ? 'book_issues_returns'
+        : currentTab === 'admin_students' || currentTab === 'admin_permissions' || currentTab === 'admin_logs' || currentTab === 'student_profile' ? 'user_management'
+        : currentTab;
+
+      if (!effectivePermissions.includes(baseTab)) {
+        setCurrentTab(effectivePermissions[0]);
+      }
+    }
+  }, [currentTab, effectivePermissions, isSuperadmin]);
+
   // Issue Book (Circulation Desk) with selected loan duration (7, 14, 21, 30 days or manual date)
-  const handleIssueBook = async (barcode, patronId, customDueDateStr = null) => {
+  const handleIssueBook = async (barcode, patronId, customDueDateStr = null, patronObj = null) => {
     const cleanId = String(patronId || '').trim().toLowerCase();
-    const patron = students.find(s => 
-      (s.id && s.id.toLowerCase() === cleanId) || 
-      (s.rollNo && s.rollNo.toLowerCase() === cleanId) ||
-      (s.name && s.name.toLowerCase() === cleanId) ||
-      (s.email && s.email.toLowerCase() === cleanId)
+    let patron = patronObj || students.find(s => 
+      (s.id && String(s.id).toLowerCase() === cleanId) || 
+      (s.rollNo && String(s.rollNo).toLowerCase() === cleanId) ||
+      (s.pin_no && String(s.pin_no).toLowerCase() === cleanId) ||
+      (s.name && String(s.name).toLowerCase() === cleanId) ||
+      (s.email && String(s.email).toLowerCase() === cleanId)
     );
 
-    // CRITICAL: Block any issue to unregistered patrons
-    if (!patron) {
-      addToast(`Cannot issue book: Patron "${patronId}" is NOT registered in the library patron database. You can only issue books to enrolled students.`, 'danger');
-      return;
-    }
-
-    if (patron.status === 'Frozen') {
+    if (patron && patron.status === 'Frozen') {
       addToast(`Cannot issue: Patron account for ${patron.name} (${patron.rollNo || patron.id}) is FROZEN. Resolve overdue penalties first.`, 'danger');
       return;
     }
@@ -409,8 +511,12 @@ export default function App() {
       return;
     }
 
+    const finalPatronId = patron?.pin_no || patron?.rollNo || patron?.id || patronId;
+    const finalPatronName = patron?.name || `Patron #${finalPatronId}`;
+    const finalDept = patron?.department || 'General';
+
     try {
-      await fetch('/api/circulation/issue', {
+      const res = await fetch('/api/circulation/issue', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -418,12 +524,20 @@ export default function App() {
         },
         body: JSON.stringify({ 
           barcode, 
-          patron_id: patron.rollNo || patron.id, 
-          patron_name: patron.name,
-          department: patron.department,
+          patron_id: finalPatronId, 
+          patron_name: finalPatronName,
+          department: finalDept,
           due_date: customDueDateStr 
         })
       });
+      const data = await res.json();
+      if (!res.ok) {
+        addToast(data.error || 'Failed to issue book.', 'danger');
+        return;
+      }
+      if (data.loan) {
+        setLoans(prev => [data.loan, ...prev.filter(l => l.id !== data.loan.id)]);
+      }
     } catch {
       // Local sync fallback
     }
@@ -481,7 +595,7 @@ export default function App() {
     }
 
     try {
-      await fetch('/api/circulation/return', {
+      const res = await fetch('/api/circulation/return', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -489,6 +603,10 @@ export default function App() {
         },
         body: JSON.stringify({ barcode })
       });
+      const data = await res.json();
+      if (data.fine) {
+        setFines(prev => [data.fine, ...prev]);
+      }
     } catch {
       // Local sync fallback
     }
@@ -540,6 +658,17 @@ export default function App() {
     validCurrentDue.setDate(validCurrentDue.getDate() + 15);
     const newDueDateStr = validCurrentDue.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
+    try {
+      fetch('/api/circulation/renew', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({ loan_id: loan.id, barcode: loan.bookBarcode || loan.accession })
+      }).catch(() => {});
+    } catch {}
+
     setLoans(prev => prev.map(l => {
       if (l.id === loan.id) {
         return {
@@ -556,34 +685,51 @@ export default function App() {
     addAuditLog(`RENEWAL: Extended loan on "${loan.bookTitle}" for ${loan.patronName}. New Due: ${newDueDateStr} (Renewal #${currentRenewals + 1}).`);
   };
 
-  // Book Reservation & Hold Management
-  const handleReserveBook = (book) => {
-    const existing = reservations.find(r => r.bookId === book.id && r.studentId === currentStudent.id);
+  // Book Reservation & Hold Management (Persisted in MongoDB)
+  const handleReserveBook = async (book) => {
+    const existing = reservations.find(r => (r.bookId === book.id || r.bookId === book._id) && r.studentId === currentStudent.id);
     if (existing) {
       addToast(`You already have an active hold on "${book.title}".`, 'info');
       return;
     }
 
-    const newRes = {
-      id: Date.now(),
-      bookId: book.id,
-      bookTitle: book.title,
-      bookAccession: book.accession,
-      studentId: currentStudent.id,
-      studentName: currentStudent.name,
-      reservedAtFormatted: 'Today, ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      shelfLocation: book.shelf,
-      expiresIn: '48 hours'
-    };
-
-    setReservations(prev => [newRes, ...prev]);
-    addToast(`Hold confirmed for "${book.title}"! Pick up at ${book.shelf} within 48h.`, 'success');
-    addAuditLog(`HOLD RESERVATION: ${currentStudent.name} (${currentStudent.id}) reserved "${book.title}" [${book.accession}].`);
+    try {
+      const res = await fetch('/api/circulation/reserve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({
+          book_id: book.id || book._id,
+          book_title: book.title,
+          book_accession: book.accession,
+          student_id: currentStudent.id,
+          student_name: currentStudent.name,
+          shelf_location: book.shelf || 'Central Stack'
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.reservation) {
+        setReservations(prev => [data.reservation, ...prev]);
+        addToast(data.message || `Hold confirmed for "${book.title}"!`, 'success');
+      } else {
+        addToast(data.error || 'Failed to place reservation.', 'danger');
+      }
+    } catch {
+      // Local fallback
+    }
   };
 
   const handleCancelReservation = (reservationId) => {
     const target = reservations.find(r => r.id === reservationId);
     setReservations(prev => prev.filter(r => r.id !== reservationId));
+    try {
+      fetch(`/api/circulation/reservations/${reservationId}`, {
+        method: 'DELETE',
+        headers: { ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}) }
+      }).catch(() => {});
+    } catch {}
     addToast(`Hold reservation on "${target?.bookTitle || 'Book'}" has been released.`, 'info');
     addAuditLog(`HOLD RELEASED: Cancelled hold for ${target?.studentName} on "${target?.bookTitle}".`);
   };
@@ -597,6 +743,18 @@ export default function App() {
       }
       return s;
     }));
+
+    // Persist status change to MongoDB Atlas backend
+    try {
+      fetch(`/api/users/${student.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({ status: nextStatus })
+      }).catch(() => {});
+    } catch {}
 
     addToast(
       nextStatus === 'Frozen'
@@ -704,6 +862,18 @@ export default function App() {
 
   // Settle Fine via Cash
   const handleCollectCash = (fine) => {
+    // Settle fine dynamically in MongoDB Atlas
+    try {
+      fetch(`/api/fines/${fine.id}/collect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({ payment_method: 'Cash' })
+      }).catch(() => {});
+    } catch {}
+
     setFines(prev => prev.map(f => {
       if (f.id === fine.id) {
         return { ...f, status: 'Paid', method: 'Cash (Desk Receipt)', paid_at: new Date().toISOString() };
@@ -733,6 +903,18 @@ export default function App() {
 
   // Settle Fine via UPI
   const handleConfirmUpi = (fine) => {
+    // Settle fine dynamically in MongoDB Atlas
+    try {
+      fetch(`/api/fines/${fine.id}/collect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({ payment_method: 'UPI Online (GPay/PhonePe)' })
+      }).catch(() => {});
+    } catch {}
+
     setFines(prev => prev.map(f => {
       if (f.id === fine.id) {
         return { ...f, status: 'Paid', method: 'UPI Online (GPay/PhonePe)', paid_at: new Date().toISOString() };
@@ -760,6 +942,18 @@ export default function App() {
 
   // Waive Fine
   const handleConfirmWaive = (fine, reason) => {
+    // Waive fine dynamically in MongoDB Atlas
+    try {
+      fetch(`/api/fines/${fine.id}/waive`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({ waiver_reason: reason })
+      }).catch(() => {});
+    } catch {}
+
     setFines(prev => prev.map(f => {
       if (f.id === fine.id) {
         return { ...f, status: 'Waived', waiver_reason: reason, paid_at: new Date().toISOString() };
@@ -794,11 +988,12 @@ export default function App() {
           onToast={addToast}
         />
         {/* Floating System Notifications */}
-        <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
+        <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-auto">
           {toasts.map(t => (
             <div
               key={t.id}
-              className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-xl backdrop-blur-md flex items-center gap-2 animate-in slide-in-from-right duration-200 ${
+              onClick={() => removeToast(t.id)}
+              className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in slide-in-from-right duration-200 cursor-pointer ${
                 t.type === 'success'
                   ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
                   : t.type === 'danger'
@@ -806,8 +1001,21 @@ export default function App() {
                   : 'bg-white border-slate-200 text-slate-800'
               }`}
             >
-              <span className="text-sm">{t.type === 'success' ? '✅' : t.type === 'danger' ? '⚠️' : 'ℹ️'}</span>
-              <span className="leading-snug">{t.message}</span>
+              <div className="flex items-center gap-2 overflow-hidden">
+                <span className="text-sm shrink-0">{t.type === 'success' ? '✅' : t.type === 'danger' ? '⚠️' : 'ℹ️'}</span>
+                <span className="leading-snug break-words">{t.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeToast(t.id);
+                }}
+                className="p-1 rounded-lg hover:bg-black/10 text-current opacity-60 hover:opacity-100 transition-opacity shrink-0"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
           ))}
         </div>
@@ -823,6 +1031,7 @@ export default function App() {
         setCurrentTab={setCurrentTab}
         currentRole={currentRole}
         setCurrentRole={setCurrentRole}
+        roles={roles}
         currentUser={currentUser}
         isCollapsed={isSidebarCollapsed}
         setIsCollapsed={setIsSidebarCollapsed}
@@ -842,7 +1051,7 @@ export default function App() {
         {/* Dynamic Main Views - Flat, Minimalist & Full-Width */}
         <main className="flex-1 p-6 sm:p-8 w-full">
           {/* 1. Dashboard */}
-          {(currentTab === 'dashboard' || currentTab === 'admin_dashboard' || currentTab === 'student_dashboard') && (
+          {hasPagePrivilege('dashboard') && (currentTab === 'dashboard' || currentTab === 'admin_dashboard' || currentTab === 'student_dashboard') && (
             <DashboardView
               books={books}
               loans={loans}
@@ -856,7 +1065,7 @@ export default function App() {
           )}
 
           {/* 2. Create Book */}
-          {currentTab === 'book_creation' && (
+          {hasPagePrivilege('book_creation') && currentTab === 'book_creation' && (
             <BookCreationView
               books={books}
               onAddBook={handleAddBook}
@@ -866,7 +1075,7 @@ export default function App() {
           )}
 
           {/* 3. All Books Catalog */}
-          {(currentTab === 'all_books' || currentTab === 'admin_books' || currentTab === 'admin_in_library' || currentTab === 'student_catalog') && (
+          {hasPagePrivilege('all_books') && (currentTab === 'all_books' || currentTab === 'admin_books' || currentTab === 'admin_in_library' || currentTab === 'student_catalog') && (
             <AllBooksView
               books={books}
               loans={loans}
@@ -883,7 +1092,7 @@ export default function App() {
           )}
 
           {/* 4. Book Issues & Returns */}
-          {(currentTab === 'book_issues_returns' || currentTab === 'admin_circulation' || currentTab === 'admin_checked_out' || currentTab === 'admin_fines' || currentTab === 'student_my_books' || currentTab === 'student_my_fines') && (
+          {hasPagePrivilege('book_issues_returns') && (currentTab === 'book_issues_returns' || currentTab === 'admin_circulation' || currentTab === 'admin_checked_out' || currentTab === 'admin_fines' || currentTab === 'student_my_books' || currentTab === 'student_my_fines') && (
             <BookIssuesReturnsView
               books={books}
               loans={loans}
@@ -902,7 +1111,7 @@ export default function App() {
           )}
 
           {/* 5. User Management */}
-          {(currentTab === 'user_management' || currentTab === 'admin_students' || currentTab === 'admin_permissions' || currentTab === 'admin_logs' || currentTab === 'student_profile') && (
+          {hasPagePrivilege('user_management') && (currentTab === 'user_management' || currentTab === 'admin_students' || currentTab === 'admin_permissions' || currentTab === 'admin_logs' || currentTab === 'student_profile') && (
             <UserManagementView
               students={students}
               loans={loans}
@@ -914,12 +1123,42 @@ export default function App() {
           )}
 
           {/* 6. Settings */}
-          {currentTab === 'settings' && (
+          {hasPagePrivilege('settings') && currentTab === 'settings' && (
             <SettingsView
               authToken={authToken}
               currentUser={currentUser}
               onToast={addToast}
             />
+          )}
+
+          {/* Access Restricted Notice if user tries to view an unauthorized tab */}
+          {!hasPagePrivilege(
+            currentTab === 'admin_dashboard' || currentTab === 'student_dashboard' ? 'dashboard'
+            : currentTab === 'admin_books' || currentTab === 'admin_in_library' || currentTab === 'student_catalog' ? 'all_books'
+            : currentTab === 'admin_circulation' || currentTab === 'admin_checked_out' || currentTab === 'admin_fines' || currentTab === 'student_my_books' || currentTab === 'student_my_fines' ? 'book_issues_returns'
+            : currentTab === 'admin_students' || currentTab === 'admin_permissions' || currentTab === 'admin_logs' || currentTab === 'student_profile' ? 'user_management'
+            : currentTab
+          ) && (
+            <div className="flex flex-col items-center justify-center p-12 text-center bg-zinc-50 border border-zinc-200/90 rounded-2xl space-y-4 my-8">
+              <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shadow-xs">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5">
+                <h2 className="text-base font-bold text-zinc-900 tracking-tight">Access Restricted</h2>
+                <p className="text-xs text-zinc-500 max-w-sm leading-relaxed">
+                  Your institutional account does not have privilege to access this view. Privileges are managed by your System Superadmin.
+                </p>
+              </div>
+              {effectivePermissions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentTab(effectivePermissions[0])}
+                  className="px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-semibold hover:bg-zinc-800 transition-colors shadow-xs"
+                >
+                  Return to Allowed Workspace
+                </button>
+              )}
+            </div>
           )}
         </main>
       </div>
@@ -949,11 +1188,12 @@ export default function App() {
       />
 
       {/* Floating System Notifications */}
-      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
+      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-auto">
         {toasts.map(t => (
           <div
             key={t.id}
-            className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-xl backdrop-blur-md flex items-center gap-2 animate-in slide-in-from-right duration-200 ${
+            onClick={() => removeToast(t.id)}
+            className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in slide-in-from-right duration-200 cursor-pointer ${
               t.type === 'success'
                 ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
                 : t.type === 'danger'
@@ -961,8 +1201,21 @@ export default function App() {
                 : 'bg-white border-slate-200 text-slate-800'
             }`}
           >
-            <span className="text-sm">{t.type === 'success' ? '✅' : t.type === 'danger' ? '⚠️' : 'ℹ️'}</span>
-            <span className="leading-snug">{t.message}</span>
+            <div className="flex items-center gap-2 overflow-hidden">
+              <span className="text-sm shrink-0">{t.type === 'success' ? '✅' : t.type === 'danger' ? '⚠️' : 'ℹ️'}</span>
+              <span className="leading-snug break-words">{t.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                removeToast(t.id);
+              }}
+              className="p-1 rounded-lg hover:bg-black/10 text-current opacity-60 hover:opacity-100 transition-opacity shrink-0"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         ))}
       </div>

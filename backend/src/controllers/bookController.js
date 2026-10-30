@@ -202,8 +202,35 @@ async function deleteBook(req, res) {
   }
 }
 
+const BASELINE_CATEGORIES = [
+  { name: 'Computer Science & Engineering', code: 'CSE', description: 'Computing systems, algorithms, architectures & software' },
+  { name: 'Mechanical Engineering', code: 'MECH', description: 'Thermal, dynamics, robotics and mechanics' },
+  { name: 'Electronics & Communication', code: 'ECE', description: 'Signals, VLSI design, communications and circuits' },
+  { name: 'Artificial Intelligence & Data Science', code: 'AIDS', description: 'Machine learning, neural networks & statistical modeling' },
+  { name: 'Management & Business Studies', code: 'MGMT', description: 'Administration, finance, human resource & marketing' },
+  { name: 'General Reference', code: 'GEN', description: 'Handbooks, dictionaries, general science & encyclopedias' }
+];
+
+let categoriesSeeded = false;
+async function ensureSeedCategories() {
+  if (categoriesSeeded) return;
+  try {
+    const count = await Category.countDocuments();
+    if (count === 0) {
+      for (const cat of BASELINE_CATEGORIES) {
+        await Category.create(cat);
+      }
+      console.log('📚 Seeded baseline academic categories in database');
+    }
+    categoriesSeeded = true;
+  } catch (err) {
+    console.error('Error ensuring categories in DB:', err.message);
+  }
+}
+
 async function getCategories(req, res) {
   try {
+    await ensureSeedCategories();
     const categories = await Category.find().sort({ name: 1 }).lean();
     res.json({ total: categories.length, categories });
   } catch (err) {
@@ -239,6 +266,29 @@ async function createCategory(req, res) {
   }
 }
 
+async function updateCategory(req, res) {
+  try {
+    const { id } = req.params;
+    const { name, code, description } = req.body || {};
+    const updated = await Category.findByIdAndUpdate(
+      id,
+      {
+        ...(name ? { name: name.trim() } : {}),
+        ...(code ? { code: code.trim().toUpperCase() } : {}),
+        ...(description !== undefined ? { description: description.trim() } : {})
+      },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    res.json({ message: 'Category updated successfully', category: updated });
+  } catch (err) {
+    console.error('Error updating category:', err);
+    res.status(500).json({ error: 'Failed to update category: ' + err.message });
+  }
+}
+
 async function deleteCategory(req, res) {
   try {
     const { id } = req.params;
@@ -258,5 +308,7 @@ module.exports = {
   deleteBook,
   getCategories,
   createCategory,
-  deleteCategory
+  updateCategory,
+  deleteCategory,
+  ensureSeedCategories
 };

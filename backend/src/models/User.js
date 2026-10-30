@@ -26,8 +26,8 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['Superadmin', 'Librarian', 'Sub-staff', 'Student', 'Faculty'],
-      default: 'Student'
+      default: 'Student',
+      trim: true
     },
     role_id: {
       type: Number,
@@ -46,6 +46,10 @@ const userSchema = new mongoose.Schema(
     department: {
       type: String,
       default: 'General'
+    },
+    division: {
+      type: String,
+      default: ''
     },
     status: {
       type: String,
