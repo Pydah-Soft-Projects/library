@@ -39,6 +39,7 @@ if (mongoUri) {
 // Middlewares
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // 1. Health & Status
 app.get('/api/health', (req, res) => {
