@@ -113,13 +113,13 @@ jobs:
           if [ ! -d node_modules ] || [ "${CURRENT_HASH}" != "${PREV_HASH}" ]; then
             echo "==> Installing backend dependencies (lockfile changed or node_modules missing)..."
             if [ -f package-lock.json ]; then
-              npm ci --omit=dev
+              npm i --omit=dev
             else
               npm install --omit=dev
             fi
             echo "${CURRENT_HASH}" > "${LOCK_HASH_FILE}"
           else
-            echo "==> Backend dependencies unchanged, skipping npm ci"
+            echo "==> Backend dependencies unchanged, skipping npm i"
           fi
 
           # Link backend/node_modules to root so frontend JSX templates required by print service can resolve react
