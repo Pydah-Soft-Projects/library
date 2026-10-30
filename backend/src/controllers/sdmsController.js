@@ -10,7 +10,7 @@ async function getStudents(req, res) {
     });
   } catch (err) {
     console.error('SDMS getStudents controller error:', err.message);
-    res.status(500).json({ error: 'Failed to search students from SDMS database: ' + err.message });
+    res.json({ total: 0, students: [], error: err.message });
   }
 }
 

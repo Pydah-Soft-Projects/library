@@ -9,6 +9,7 @@ export default function DashboardView({
   loans = [],
   fines = [],
   students = [],
+  hrmsUsersCount = 1,
   auditLogs = [],
   onNavigate,
   onOpenUpiModal,
@@ -58,9 +59,9 @@ export default function DashboardView({
       color: totalFineAmount > 0 ? 'rose' : 'blue'
     },
     {
-      label: 'Registered Patrons',
-      value: students.length,
-      sub: `${activePatrons} active • ${frozenPatrons} hold`,
+      label: 'Library Users',
+      value: (typeof hrmsUsersCount === 'number') ? hrmsUsersCount : 1,
+      sub: 'Mapped strictly via HRMS',
       tab: 'user_management',
       highlight: false,
       color: 'blue'
@@ -99,7 +100,7 @@ export default function DashboardView({
       </div>
 
       {/* Blue Themed Aligned Metric Strip */}
-      <div className="border-t border-b border-blue-100 divide-y sm:divide-y-0 sm:divide-x divide-blue-100 grid grid-cols-2 lg:grid-cols-5 py-2 bg-blue-50/30">
+      <div className="border-t border-b border-blue-100 divide-y sm:divide-y-0 sm:divide-x divide-blue-100 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 py-2 bg-blue-50/30">
         {metrics.map((m, i) => (
           <div
             key={i}

@@ -117,7 +117,7 @@ async function issueBook(req, res) {
 
     const currentLoansCount = await Loan.countDocuments({
       user_id: patronDocId,
-      status: { $in: ['Borrowed', 'Overdue'] }
+      status: { $in: ['Borrowed', 'Overdue', 'Active'] }
     });
 
     if (currentLoansCount >= maxQuota) {
@@ -241,7 +241,7 @@ async function returnBook(req, res) {
           { patron_id: cleanBarcode.toUpperCase() },
           { patron_name: new RegExp(`^${cleanBarcode}$`, 'i') }
         ],
-        status: { $in: ['Borrowed', 'Overdue'] }
+        status: { $in: ['Borrowed', 'Overdue', 'Active'] }
       }).sort({ created_at: -1 });
     }
 
@@ -342,7 +342,7 @@ async function renewLoan(req, res) {
     } else if (barcode) {
       loan = await Loan.findOne({
         $or: [{ book_barcode: barcode }, { accession: barcode }],
-        status: { $in: ['Borrowed', 'Overdue'] }
+        status: { $in: ['Borrowed', 'Overdue', 'Active'] }
       }).sort({ created_at: -1 });
     }
 
@@ -531,6 +531,88 @@ async function cancelReservation(req, res) {
   }
 }
 
+// 8. Bulk Import Circulations (Excel / CSV Spreadsheet Import)
+async function bulkImportCirculations(req, res) {
+  try {
+    const { circulations } = req.body || {};
+    if (!Array.isArray(circulations) || circulations.length === 0) {
+      return res.status(400).json({ error: 'Array of circulation records is required.' });
+    }
+
+    const createdLoans = [];
+    const errors = [];
+
+    for (let i = 0; i < circulations.length; i++) {
+      const item = circulations[i];
+      const patronId = String(item.patronId || item.patron_id || item.studentPin || item.pinNo || item.rollNo || '').trim();
+      const patronName = String(item.patronName || item.patron_name || item.studentName || item.name || 'Student Borrower').trim();
+      const accession = String(item.accession || item.accessionNo || item.serialNo || item.barcode || '').trim();
+      const bookTitle = String(item.bookTitle || item.title || item.book_title || 'Library Holding').trim();
+      const statusRaw = String(item.status || 'Active').trim();
+      const isReturned = statusRaw.toLowerCase() === 'returned';
+      const isOverdue = statusRaw.toLowerCase() === 'overdue';
+      const status = isReturned ? 'Returned' : isOverdue ? 'Overdue' : 'Active';
+
+      const issueDate = item.issueDate ? new Date(item.issueDate) : new Date();
+      const dueDate = item.dueDate ? new Date(item.dueDate) : new Date(issueDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const returnDate = isReturned ? (item.returnDate ? new Date(item.returnDate) : new Date()) : null;
+
+      if (!patronId && !accession && !bookTitle) {
+        continue;
+      }
+
+      try {
+        const newLoan = await Loan.create({
+          patron_id: patronId || 'GENERAL',
+          patron_name: patronName,
+          accession: accession || 'AC-BULK',
+          book_barcode: accession || 'BC-BULK',
+          barcode: accession || 'BC-BULK',
+          book_title: bookTitle,
+          department: item.department || 'General',
+          status: status,
+          issue_date: issueDate,
+          due_date: dueDate,
+          return_date: returnDate
+        });
+
+        createdLoans.push({
+          id: newLoan._id.toString(),
+          accession: newLoan.accession,
+          bookBarcode: newLoan.barcode,
+          bookTitle: newLoan.book_title,
+          patronId: newLoan.patron_id,
+          patronName: newLoan.patron_name,
+          department: newLoan.department,
+          status: newLoan.status,
+          issueDate: newLoan.issue_date ? newLoan.issue_date.toISOString().split('T')[0] : '',
+          dueDate: newLoan.due_date ? newLoan.due_date.toISOString().split('T')[0] : '',
+          dueDateFormatted: newLoan.due_date ? newLoan.due_date.toLocaleDateString('en-GB') : ''
+        });
+      } catch (err) {
+        errors.push({ index: i, error: err.message });
+      }
+    }
+
+    logAudit({
+      actor_id: req.user?.userId || 'ADMIN',
+      action_key: 'circulation.bulk_import',
+      target_resource: 'LOANS',
+      payload: { count: createdLoans.length, errorsCount: errors.length }
+    });
+
+    res.json({
+      message: `Successfully imported ${createdLoans.length} circulation records.`,
+      count: createdLoans.length,
+      loans: createdLoans,
+      errors
+    });
+  } catch (err) {
+    console.error('Error in bulkImportCirculations:', err);
+    res.status(500).json({ error: 'Failed to bulk import circulations: ' + err.message });
+  }
+}
+
 module.exports = {
   issueBook,
   returnBook,
@@ -538,5 +620,6 @@ module.exports = {
   getActiveLoans,
   getReservations,
   createReservation,
-  cancelReservation
+  cancelReservation,
+  bulkImportCirculations
 };

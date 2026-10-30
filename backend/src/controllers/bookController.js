@@ -43,7 +43,7 @@ async function getBooks(req, res) {
       barcode: b.barcode,
       shelf: b.shelf,
       total: b.total,
-      available: b.available,
+      available: b.available !== undefined && b.available !== null ? Number(b.available) : (b.copies_detail?.length || b.total || 1),
       publisher: b.publisher,
       edition: b.edition,
       copies_detail: b.copies_detail || []
@@ -89,6 +89,40 @@ async function getBookById(req, res) {
   }
 }
 
+
+async function getLatestAccessionSerial() {
+  try {
+    const books = await Book.find({}, 'accession barcode copies_detail').lean();
+    let max = 0;
+    books.forEach(b => {
+      if (Array.isArray(b.copies_detail)) {
+        b.copies_detail.forEach(c => {
+          const n1 = parseInt(String(c.accession || '').replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(n1) && n1 > max) max = n1;
+          const n2 = parseInt(String(c.serial_no || '').replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(n2) && n2 > max) max = n2;
+        });
+      }
+      const n1 = parseInt(String(b.accession || '').replace(/[^0-9]/g, ''), 10);
+      if (!isNaN(n1) && n1 > max) max = n1;
+      const n2 = parseInt(String(b.barcode || '').replace(/[^0-9]/g, ''), 10);
+      if (!isNaN(n2) && n2 > max) max = n2;
+    });
+    return max;
+  } catch (e) {
+    return 0;
+  }
+}
+
+async function getLatestSerialEndpoint(req, res) {
+  try {
+    const latest = await getLatestAccessionSerial();
+    res.json({ latest_serial: latest, next_serial: latest + 1 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 async function createBook(req, res) {
   try {
     const { 
@@ -113,25 +147,29 @@ async function createBook(req, res) {
 
     const copies = Math.max(1, parseInt(total, 10) || 1);
     const catCode = (category_code || (category || 'GEN').slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'GEN';
-    const randBase = Math.floor(1000 + Math.random() * 9000);
-    const finalAccession = accession || `ACC-${catCode}-${randBase}`;
-    const finalBarcode = barcode || `BC-${catCode}-${randBase}`;
 
-    // Auto-generate sequential copy IDs and serial numbers if not passed explicitly
+    // Auto-generate sequential copy IDs and serial numbers continuing from max existing serial
     let finalCopiesDetail = [];
     if (Array.isArray(copies_detail) && copies_detail.length > 0) {
       finalCopiesDetail = copies_detail;
     } else {
+      const latestSerial = await getLatestAccessionSerial();
       for (let i = 1; i <= copies; i++) {
+        const serialStr = String(latestSerial + i);
         finalCopiesDetail.push({
           copy_number: i,
-          serial_no: `SN-${catCode}-${randBase}-${String(i).padStart(2, '0')}`,
-          accession: `${finalAccession}-C${i}`,
-          barcode: `${finalBarcode}-${i}`,
+          serial_no: serialStr,
+          accession: serialStr,
+          barcode: serialStr,
           status: 'Available'
         });
       }
     }
+
+    const firstCopyAcc = finalCopiesDetail[0]?.accession || '1';
+    const lastCopyAcc = finalCopiesDetail[finalCopiesDetail.length - 1]?.accession || firstCopyAcc;
+    const finalAccession = accession || (copies > 1 ? `${firstCopyAcc} - ${lastCopyAcc}` : firstCopyAcc);
+    const finalBarcode = barcode || firstCopyAcc;
 
     const newBook = await Book.create({
       title: title.trim(),
@@ -142,8 +180,8 @@ async function createBook(req, res) {
       accession: finalAccession,
       barcode: finalBarcode,
       shelf: shelf ? shelf.trim() : 'Central Stack',
-      total: copies,
-      available: available !== undefined ? parseInt(available, 10) : copies,
+      total: finalCopiesDetail.length,
+      available: available !== undefined ? parseInt(available, 10) : finalCopiesDetail.length,
       publisher: publisher ? publisher.trim() : 'Institutional Press',
       edition: edition ? edition.trim() : 'Standard Edition',
       copies_detail: finalCopiesDetail
@@ -156,13 +194,13 @@ async function createBook(req, res) {
       payload: { 
         title: newBook.title, 
         accession: newBook.accession, 
-        copies: copies, 
+        copies: finalCopiesDetail.length, 
         serial_numbers: finalCopiesDetail.map(c => c.serial_no) 
       }
     });
 
     res.status(201).json({
-      message: `Book created with ${copies} sequential copies and serial numbers`,
+      message: `Book created with ${finalCopiesDetail.length} sequential copies and serial numbers`,
       book: {
         id: newBook._id.toString(),
         ...newBook.toObject()
@@ -171,6 +209,129 @@ async function createBook(req, res) {
   } catch (err) {
     console.error('Error creating book in MongoDB:', err);
     res.status(500).json({ error: 'Failed to create book: ' + err.message });
+  }
+}
+
+async function bulkCreateBooks(req, res) {
+  try {
+    const { books } = req.body || {};
+    if (!Array.isArray(books) || books.length === 0) {
+      return res.status(400).json({ error: 'Array of books is required' });
+    }
+
+    const createdBooks = [];
+    const errors = [];
+    let currentLatestSerial = await getLatestAccessionSerial();
+
+    for (let index = 0; index < books.length; index++) {
+      const item = books[index];
+      const title = (item.title || item.titleName || item['title Name'] || '').trim();
+      const author = (item.author || item.authorName || item['authorName'] || 'BPB Publication').trim();
+
+      if (!title) {
+        errors.push({ index, error: 'Missing book title' });
+        continue;
+      }
+
+      // Category is strictly optional - defaults to 'General'
+      const rawCategory = (item.category || item.categoryName || item['Category Name'] || '').trim();
+      const category = rawCategory || 'General';
+      const catCode = (item.category_code || category.slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'GEN';
+      
+      const copies = Math.max(1, parseInt(item.total || item.copies || item.quantity || (item.copies_detail ? item.copies_detail.length : 1), 10));
+
+      let finalCopiesDetail = [];
+      if (Array.isArray(item.copies_detail) && item.copies_detail.length > 0) {
+        finalCopiesDetail = item.copies_detail.map((c, i) => {
+          const acc = String(c.accession || c.serial_no || (++currentLatestSerial)).trim();
+          const num = parseInt(acc.replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(num) && num > currentLatestSerial) currentLatestSerial = num;
+          return {
+            copy_number: c.copy_number || i + 1,
+            serial_no: String(c.serial_no || acc),
+            accession: acc,
+            barcode: String(c.barcode || acc),
+            status: c.status || 'Available'
+          };
+        });
+      } else {
+        for (let i = 1; i <= copies; i++) {
+          const serial = String(++currentLatestSerial);
+          finalCopiesDetail.push({
+            copy_number: i,
+            serial_no: serial,
+            accession: serial,
+            barcode: serial,
+            status: 'Available'
+          });
+        }
+      }
+
+      const firstAcc = finalCopiesDetail[0]?.accession || String(currentLatestSerial);
+      const lastAcc = finalCopiesDetail[finalCopiesDetail.length - 1]?.accession || firstAcc;
+      const baseAcc = item.accession || (finalCopiesDetail.length > 1 ? `${firstAcc} - ${lastAcc}` : firstAcc);
+      const baseBarcode = item.barcode || firstAcc;
+
+      try {
+        const newBook = await Book.create({
+          title,
+          author,
+          isbn: (item.isbn || item['ClassificationNumber'] || '').trim(),
+          category,
+          category_code: catCode,
+          accession: baseAcc,
+          barcode: baseBarcode,
+          shelf: (item.shelf || item.almWsId || item['Alm WS.ID'] || item['Place Of Publication'] || 'Central Stack').trim() || 'Central Stack',
+          total: finalCopiesDetail.length,
+          available: item.available !== undefined ? parseInt(item.available, 10) : finalCopiesDetail.length,
+          publisher: (item.publisher || item.publisherName || item['publisher Name'] || 'BPB Publication').trim() || 'BPB Publication',
+          edition: (item.edition || item.year || item['Year Of Publication'] || 'Standard Edition').trim() || 'Standard Edition',
+          copies_detail: finalCopiesDetail
+        });
+
+        createdBooks.push({
+          id: newBook._id.toString(),
+          _id: newBook._id.toString(),
+          title: newBook.title,
+          author: newBook.author,
+          isbn: newBook.isbn,
+          category: newBook.category,
+          category_code: newBook.category_code,
+          accession: newBook.accession,
+          barcode: newBook.barcode,
+          shelf: newBook.shelf,
+          total: newBook.total,
+          available: newBook.available,
+          publisher: newBook.publisher,
+          edition: newBook.edition,
+          copies_detail: newBook.copies_detail
+        });
+      } catch (err) {
+        console.error('Error bulk saving book:', err);
+        errors.push({ title, error: err.message });
+      }
+    }
+
+    logAudit({
+      actor_id: req.user?.userId || 'STAFF',
+      action_key: 'catalog.bulk_import',
+      target_resource: 'BOOKS',
+      payload: { 
+        imported_count: createdBooks.length, 
+        error_count: errors.length,
+        titles: createdBooks.map(b => b.title)
+      }
+    });
+
+    res.status(201).json({
+      message: `Successfully imported ${createdBooks.length} books into the catalog`,
+      imported_count: createdBooks.length,
+      books: createdBooks,
+      errors
+    });
+  } catch (err) {
+    console.error('Error in bulkCreateBooks:', err);
+    res.status(500).json({ error: 'Failed to bulk import books: ' + err.message });
   }
 }
 
@@ -304,11 +465,13 @@ module.exports = {
   getBooks,
   getBookById,
   createBook,
+  bulkCreateBooks,
   updateBook,
   deleteBook,
   getCategories,
   createCategory,
   updateCategory,
   deleteCategory,
-  ensureSeedCategories
+  ensureSeedCategories,
+  getLatestSerialEndpoint
 };

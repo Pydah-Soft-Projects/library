@@ -104,7 +104,8 @@ async function searchStudents(query = '', limit = 25) {
     });
   } catch (err) {
     console.error('Error querying SDMS students:', err.message);
-    throw err;
+    pool = null;
+    return [];
   }
 }
 

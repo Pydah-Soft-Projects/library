@@ -1,17 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { 
   BookOpen, Plus, Sparkles, RefreshCw, Layers, MapPin, 
   Check, ArrowRight, Hash, Bookmark, Eye, CheckCircle2,
-  X, Tag, Barcode, Copy, Trash2, FolderPlus, Search, List
+  X, Tag, Barcode, Copy, Trash2, FolderPlus, Search, List,
+  FileSpreadsheet, UploadCloud, Download, AlertCircle, FileText, CheckCircle,
+  Upload, SlidersHorizontal
 } from 'lucide-react';
 
 export default function BookCreationView({ 
   books = [],
   onAddBook, 
+  onBulkAddBooks,
   onNavigate, 
   onToast 
 }) {
-  const [activeTab, setActiveTab] = useState('catalog'); // 'catalog' | 'categories'
+  const [activeTab, setActiveTab] = useState('catalog'); // 'catalog' | 'excel' | 'categories'
 
   // Modals state
   const [isCreateBookModalOpen, setIsCreateBookModalOpen] = useState(false);
@@ -45,15 +49,12 @@ export default function BookCreationView({
         if (data && Array.isArray(data.categories)) {
           setCategories(data.categories);
           try { localStorage.setItem('lm_categories', JSON.stringify(data.categories)); } catch {}
-          if (data.categories.length > 0 && !selectedCategoryName) {
-            setSelectedCategoryName(data.categories[0].name);
-          }
         }
       })
       .catch(() => {});
   }, []);
 
-  // Form State: Create Book Popup
+  // Form State: Create Book Popup (Category is completely optional)
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [isbn, setIsbn] = useState('978-013');
@@ -69,40 +70,76 @@ export default function BookCreationView({
   const [newCatCode, setNewCatCode] = useState('');
   const [newCatDesc, setNewCatDesc] = useState('');
 
-  // Selected Category Object (Compact code without hyphens)
-  const currentCategoryObj = categories.find(c => c.name === selectedCategoryName) || categories[0] || { name: 'General', code: 'GEN' };
+  // Excel Upload & Parser State
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const [isParsingExcel, setIsParsingExcel] = useState(false);
+  const [parsedBooks, setParsedBooks] = useState([]);
+  const [parseSummary, setParseSummary] = useState(null); // { totalRows, validCount, invalidCount }
+  const [excelSearchTerm, setExcelSearchTerm] = useState('');
+  const [defaultUploadCategory, setDefaultUploadCategory] = useState('');
+  const [defaultUploadShelf, setDefaultUploadShelf] = useState('Central Stack');
+  const [defaultUploadCopies, setDefaultUploadCopies] = useState(1);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importCompleted, setImportCompleted] = useState(false);
+  const [importCount, setImportCount] = useState(0);
+  const fileInputRef = useRef(null);
+
+  // Helper to extract highest serial / accession number from catalog
+  const getHighestSerialNumber = (bookList) => {
+    let maxNum = 0;
+    if (!Array.isArray(bookList)) return 0;
+    bookList.forEach(b => {
+      if (Array.isArray(b.copies_detail) && b.copies_detail.length > 0) {
+        b.copies_detail.forEach(c => {
+          const n1 = parseInt(String(c.accession || '').replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(n1) && n1 > maxNum) maxNum = n1;
+          const n2 = parseInt(String(c.serial_no || '').replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(n2) && n2 > maxNum) maxNum = n2;
+        });
+      } else {
+        const n1 = parseInt(String(b.accession || '').replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(n1) && n1 > maxNum) maxNum = n1;
+        const n2 = parseInt(String(b.barcode || '').replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(n2) && n2 > maxNum) maxNum = n2;
+      }
+    });
+    return maxNum;
+  };
+
+  const latestCatalogSerial = getHighestSerialNumber(books);
+  const [startSerial, setStartSerial] = useState(latestCatalogSerial + 1);
+
+  // Automatically update startSerial when books catalog changes or modal opens
+  useEffect(() => {
+    const latest = getHighestSerialNumber(books);
+    setStartSerial(latest + 1);
+  }, [books, isCreateBookModalOpen]);
+
+  // Selected Category Object (Defaults to General if not chosen)
+  const currentCategoryObj = categories.find(c => c.name === selectedCategoryName) || { name: 'General', code: 'GEN' };
   const currentCode = (currentCategoryObj.code || (currentCategoryObj.name.slice(0, 3))).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'GEN';
 
-  // Base Accession & Barcode (Compact without dashes '-')
-  const baseAccession = `AC${currentCode}${baseRandCode}`;
-  const baseBarcode = `BC${currentCode}${baseRandCode}`;
-
-  // Sequential Copies Generator (Compact without dashes '-')
-  const generateSequentialCopiesList = (copyCount, catCode, randCode) => {
+  // Sequential Copies Generator: each copy's accession number IS the serial number
+  const generateSequentialCopiesList = (copyCount, startingNum) => {
     const list = [];
     const count = Math.max(1, parseInt(copyCount, 10) || 1);
-    const cleanCat = (catCode || 'GEN').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
-    for (let i = 1; i <= count; i++) {
+    const start = Math.max(1, parseInt(startingNum, 10) || 1);
+    for (let i = 0; i < count; i++) {
+      const serialStr = String(start + i);
       list.push({
-        copy_number: i,
-        serial_no: `SN${cleanCat}${randCode}${i}`,
-        accession: `AC${cleanCat}${randCode}${i}`,
-        barcode: `BC${cleanCat}${randCode}${i}`,
+        copy_number: i + 1,
+        serial_no: serialStr,
+        accession: serialStr,
+        barcode: serialStr,
         status: 'Available'
       });
     }
     return list;
   };
 
-  const sequentialCopies = generateSequentialCopiesList(copies, currentCode, baseRandCode);
+  const sequentialCopies = generateSequentialCopiesList(copies, startSerial);
 
-  const handleRegenerateCodes = () => {
-    const nextRand = Math.floor(10 + Math.random() * 90);
-    setBaseRandCode(nextRand);
-    if (onToast) onToast('Regenerated compact sequential codes', 'info');
-  };
-
-  // Submit Create Book
+  // Submit Create Book (Category is completely optional, serial numbers follow latest catalog)
   const handleCreateBookSubmit = (e) => {
     e.preventDefault();
     if (!title.trim() || !author.trim()) {
@@ -111,21 +148,27 @@ export default function BookCreationView({
     }
 
     const copyCount = Math.max(1, parseInt(copies, 10) || 1);
-    const finalCopies = generateSequentialCopiesList(copyCount, currentCode, baseRandCode);
+    const targetCatObj = categories.find(c => c.name === selectedCategoryName) || { name: 'General', code: 'GEN' };
+    const targetCode = (targetCatObj.code || targetCatObj.name.slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'GEN';
+    const finalCopies = generateSequentialCopiesList(copyCount, startSerial);
+
+    const firstAcc = finalCopies[0]?.accession || String(startSerial);
+    const lastAcc = finalCopies[finalCopies.length - 1]?.accession || firstAcc;
+    const finalAccession = copyCount > 1 ? `${firstAcc} - ${lastAcc}` : firstAcc;
 
     const newBook = {
       id: Date.now(),
       title: title.trim(),
       author: author.trim(),
-      isbn: isbn.trim() || '978-XXXXXX',
-      category: currentCategoryObj.name,
-      category_code: currentCode,
-      accession: baseAccession,
-      barcode: baseBarcode,
+      isbn: isbn.trim() || '',
+      category: selectedCategoryName ? targetCatObj.name : 'General',
+      category_code: targetCode,
+      accession: finalAccession,
+      barcode: firstAcc,
       shelf: shelf.trim() || 'Central Stack',
       total: copyCount,
       available: copyCount,
-      publisher: publisher.trim() || 'Institutional Press',
+      publisher: publisher.trim() || 'BPB Publication',
       edition: edition.trim() || 'Standard Edition',
       copies_detail: finalCopies
     };
@@ -135,15 +178,318 @@ export default function BookCreationView({
     }
 
     if (onToast) {
-      onToast(`Book "${title}" created with ${copyCount} sequential copies and serial numbers!`, 'success');
+      onToast(`Book "${title}" created with ${copyCount} sequential copies (Serial #${firstAcc} to #${lastAcc})!`, 'success');
     }
 
-    // Reset & close popup
     setIsCreateBookModalOpen(false);
     setTitle('');
     setAuthor('');
-    setCopies(4);
-    handleRegenerateCodes();
+    setSelectedCategoryName('');
+    setCopies(2);
+  };
+
+    // ==================== EXCEL PARSER LOGIC ====================
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    parseExcelFile(file);
+  };
+
+  const handleDropFile = (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    parseExcelFile(file);
+  };
+
+  const parseExcelFile = (file) => {
+    setUploadedFileName(file.name);
+    setIsParsingExcel(true);
+    setImportCompleted(false);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+        if (!rawRows || rawRows.length === 0) {
+          if (onToast) onToast('The uploaded spreadsheet contains no data rows.', 'danger');
+          setIsParsingExcel(false);
+          return;
+        }
+
+        // Grouping Map to accumulate multiple entries of the same book into copies count
+        const groupedBooksMap = new Map();
+        let skippedRowsCount = 0;
+        let runningSerial = getHighestSerialNumber(books);
+
+        rawRows.forEach((row, idx) => {
+          // Normalize row keys by stripping non-alphanumeric characters and lowercasing
+          const map = {};
+          Object.keys(row).forEach(k => {
+            const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            map[cleanKey] = row[k];
+          });
+
+          const titleVal = (
+            map['titlename'] ||
+            map['title'] ||
+            map['booktitle'] ||
+            map['name'] ||
+            ''
+          ).toString().trim();
+
+          const accVal = (
+            map['accessionno'] ||
+            map['accession'] ||
+            map['serialno'] ||
+            ''
+          ).toString().trim();
+
+          const titleId = (map['titleid'] || '').toString().trim();
+
+          // Gracefully skip metadata/status rows (like "Status :"), header repeats, or empty rows
+          if (!titleVal && (!accVal || accVal.toLowerCase().includes('status'))) {
+            skippedRowsCount++;
+            return;
+          }
+          if (titleVal.toLowerCase().includes('status :') || accVal.toLowerCase().includes('status')) {
+            skippedRowsCount++;
+            return;
+          }
+          if (!titleVal && !accVal) {
+            skippedRowsCount++;
+            return;
+          }
+
+          // Track numeric accession for continuing serial numbers
+          const numericAcc = parseInt(accVal.replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(numericAcc) && numericAcc > runningSerial) {
+            runningSerial = numericAcc;
+          }
+
+          const authorVal = (
+            map['authorname'] ||
+            map['author'] ||
+            map['authors'] ||
+            map['publishername'] ||
+            'BPB Publication'
+          ).toString().trim() || 'Institutional Author';
+
+          const publisherVal = (
+            map['publishername'] ||
+            map['publisher'] ||
+            'BPB Publication'
+          ).toString().trim() || 'BPB Publication';
+
+          const editionVal = (
+            map['edition'] ||
+            map['yearofpublication'] ||
+            map['year'] ||
+            'Standard Edition'
+          ).toString().trim();
+
+          const pagesVal = (map['pages'] || '').toString().trim();
+
+          const shelfVal = (
+            map['palceofpublication'] ||
+            map['placeofpublication'] ||
+            map['almwsid'] ||
+            map['shelf'] ||
+            map['rack'] ||
+            'Central Stack'
+          ).toString().trim() || 'Central Stack';
+
+          const categoryVal = (
+            map['categoryname'] ||
+            map['category'] ||
+            'General'
+          ).toString().trim() || 'General';
+
+          const isbnVal = (
+            map['classificationnumber'] ||
+            map['cluttercallno'] ||
+            map['isbn'] ||
+            ''
+          ).toString().trim();
+
+          // Group by titleId if provided, or normalized title name
+          const groupKey = titleId ? ('id_' + titleId) : ('title_' + titleVal.toLowerCase());
+
+          if (!groupedBooksMap.has(groupKey)) {
+            groupedBooksMap.set(groupKey, {
+              titleId,
+              title: titleVal,
+              author: authorVal,
+              publisher: publisherVal,
+              edition: editionVal,
+              pages: pagesVal,
+              shelf: shelfVal,
+              category: categoryVal,
+              isbn: isbnVal,
+              copies: []
+            });
+          }
+
+          const bookGroup = groupedBooksMap.get(groupKey);
+          const copyNumber = bookGroup.copies.length + 1;
+          const copyAccession = accVal || String(runningSerial + 1);
+
+          bookGroup.copies.push({
+            copy_number: copyNumber,
+            serial_no: copyAccession,
+            accession: copyAccession,
+            barcode: copyAccession,
+            status: 'Available'
+          });
+        });
+
+        // Convert grouped books into normalized list for review
+        const normalizedList = Array.from(groupedBooksMap.values()).map((b, idx) => {
+          const firstAcc = b.copies[0]?.accession || '1';
+          const lastAcc = b.copies[b.copies.length - 1]?.accession || firstAcc;
+          const accDisplay = b.copies.length > 1 ? `${firstAcc} - ${lastAcc}` : firstAcc;
+
+          return {
+            id: `excel-book-${Date.now()}-${idx}`,
+            rowNumber: idx + 1,
+            titleId: b.titleId,
+            title: b.title,
+            author: b.author,
+            publisher: b.publisher,
+            edition: b.edition,
+            pages: b.pages,
+            category: b.category,
+            hasFileCategory: Boolean(b.category && b.category !== 'General'),
+            shelf: b.shelf,
+            total: b.copies.length,
+            available: b.copies.length,
+            accession: accDisplay,
+            barcode: firstAcc,
+            isbn: b.isbn,
+            copies_detail: b.copies,
+            isValid: true
+          };
+        });
+
+        setParsedBooks(normalizedList);
+        const totalCopiesCount = normalizedList.reduce((sum, b) => sum + b.total, 0);
+
+        setParseSummary({
+          totalTitles: normalizedList.length,
+          totalCopies: totalCopiesCount,
+          skippedRows: skippedRowsCount,
+          validCount: normalizedList.length,
+          invalidCount: 0
+        });
+
+        if (onToast) {
+          onToast(`Parsed ${normalizedList.length} book titles with ${totalCopiesCount} physical copies! (Accessions: #${normalizedList[0]?.copies_detail[0]?.accession} to #${runningSerial})`, 'success');
+        }
+      } catch (err) {
+        console.error('Failed to parse Excel:', err);
+        if (onToast) onToast('Failed to parse file: ' + err.message, 'danger');
+      } finally {
+        setIsParsingExcel(false);
+      }
+    };
+
+    reader.onerror = () => {
+      setIsParsingExcel(false);
+      if (onToast) onToast('Failed to read the file.', 'danger');
+    };
+
+    reader.readAsArrayBuffer(file);
+  };
+
+  // Sample Excel Generator matching exact software columns & multiple copies per book
+  const handleDownloadSampleExcel = () => {
+    const sampleHeaders = [
+      'AccessionNo', 'TitleId', 'TitleName', 'AuthorName', 'MediaName', 'AllowLend.',
+      'PublisherName', 'Palce OfPublication', 'Year OfPublication', 'Clutter/Call No',
+      'Category Name', 'ClassificationNumber', 'Language Name', 'BindingSize', 'Pages',
+      'Edition', 'SupplierName', 'BillNumber', 'Date OfPurchase', 'Entry Date', 'Currency', 'DiscountPercent'
+    ];
+
+    const sampleRows = [
+      sampleHeaders,
+      ['1', '1121', 'Let us c', 'Yashavant Kanetkar', 'BOOK', 'Y', 'BPB Publication', '18', '2022', '', 'Computer Science', '978-8176566216', 'English', 'Standard', '748', '8th', 'VGS', 'BILL-101', '2024-01-15', '2024-01-20', 'INR', '0'],
+      ['2', '1121', 'Let us c', 'Yashavant Kanetkar', 'BOOK', 'Y', 'BPB Publication', '18', '2022', '', 'Computer Science', '978-8176566216', 'English', 'Standard', '748', '8th', 'VGS', 'BILL-101', '2024-01-15', '2024-01-20', 'INR', '0'],
+      ['3', '1121', 'Let us c', 'Yashavant Kanetkar', 'BOOK', 'Y', 'BPB Publication', '18', '2022', '', 'Computer Science', '978-8176566216', 'English', 'Standard', '748', '8th', 'VGS', 'BILL-101', '2024-01-15', '2024-01-20', 'INR', '0'],
+      ['4', '651', 'UnderstadingPointers in C', 'Yashavant Kanetkar', 'BOOK', 'Y', 'BPB Publication', '18', '2021', '', 'Computer Science', '978-8176563581', 'English', 'Standard', '501', '3rd', 'VGS', 'BILL-102', '2024-01-15', '2024-01-20', 'INR', '0'],
+      ['5', '651', 'UnderstadingPointers in C', 'Yashavant Kanetkar', 'BOOK', 'Y', 'BPB Publication', '18', '2021', '', 'Computer Science', '978-8176563581', 'English', 'Standard', '501', '3rd', 'VGS', 'BILL-102', '2024-01-15', '2024-01-20', 'INR', '0'],
+      ['6', '651', 'UnderstadingPointers in C', 'Yashavant Kanetkar', 'BOOK', 'Y', 'BPB Publication', '18', '2021', '', 'Computer Science', '978-8176563581', 'English', 'Standard', '501', '3rd', 'VGS', 'BILL-102', '2024-01-15', '2024-01-20', 'INR', '0'],
+      ['7', '651', 'UnderstadingPointers in C', 'Yashavant Kanetkar', 'BOOK', 'Y', 'BPB Publication', '18', '2021', '', 'Computer Science', '978-8176563581', 'English', 'Standard', '501', '3rd', 'VGS', 'BILL-102', '2024-01-15', '2024-01-20', 'INR', '0']
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(sampleRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Books');
+    XLSX.writeFile(wb, 'library_books_sample_template.xlsx');
+    if (onToast) onToast('Downloaded sample template with multiple copies and sequential accession serials!', 'info');
+  };
+
+    const handleConfirmImport = async () => {
+    const validBooks = parsedBooks.filter(b => b.isValid);
+    if (validBooks.length === 0) {
+      if (onToast) onToast('No valid books found to import.', 'danger');
+      return;
+    }
+
+    setIsImporting(true);
+
+    const payload = validBooks.map(b => ({
+      title: b.title,
+      author: b.author,
+      category: b.category || defaultUploadCategory || 'General',
+      accession: b.accession,
+      barcode: b.barcode || b.copies_detail?.[0]?.barcode || b.accession,
+      shelf: b.shelf || defaultUploadShelf || 'Central Stack',
+      total: b.copies_detail?.length || b.total || 1,
+      available: b.copies_detail?.length || b.total || 1,
+      publisher: b.publisher || 'BPB Publication',
+      edition: b.edition || 'Standard Edition',
+      isbn: b.isbn || '',
+      copies_detail: b.copies_detail || []
+    }));
+
+    try {
+      if (onBulkAddBooks) {
+        const res = await onBulkAddBooks(payload);
+        setImportCount(res?.count || payload.length);
+      } else {
+        const res = await fetch('/api/books/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ books: payload })
+        });
+        const data = await res.json();
+        setImportCount(data.imported_count || payload.length);
+      }
+
+      setImportCompleted(true);
+      setParsedBooks([]);
+      const totalCopiesImported = payload.reduce((sum, b) => sum + (b.copies_detail?.length || 1), 0);
+      if (onToast) onToast(`Successfully imported ${payload.length} titles with ${totalCopiesImported} physical copies!`, 'success');
+    } catch (err) {
+      console.error('Import error:', err);
+      if (onToast) onToast('Failed to import books: ' + err.message, 'danger');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleDeleteParsedRow = (id) => {
+    setParsedBooks(prev => {
+      const next = prev.filter(b => b.id !== id);
+      const valid = next.filter(b => b.isValid).length;
+      setParseSummary(s => s ? { ...s, totalRows: next.length, validCount: valid, invalidCount: next.length - valid } : null);
+      return next;
+    });
   };
 
   // Submit Create Category
@@ -213,7 +559,19 @@ export default function BookCreationView({
         </div>
 
         {/* Primary Action Buttons */}
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            onClick={() => setActiveTab('excel')}
+            className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-xs ${
+              activeTab === 'excel'
+                ? 'bg-emerald-700 text-white shadow-emerald-600/20'
+                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+            }`}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>Upload Excel</span>
+          </button>
+
           <button
             onClick={() => setIsCreateBookModalOpen(true)}
             className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
@@ -268,10 +626,10 @@ export default function BookCreationView({
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-6 border-b border-zinc-200 text-xs font-medium">
+      <div className="flex items-center gap-6 border-b border-zinc-200 text-xs font-medium overflow-x-auto">
         <button
           onClick={() => setActiveTab('catalog')}
-          className={`pb-3 transition-colors ${
+          className={`pb-3 transition-colors shrink-0 ${
             activeTab === 'catalog'
               ? 'text-zinc-900 font-bold border-b-2 border-zinc-900'
               : 'text-zinc-500 hover:text-zinc-900'
@@ -281,8 +639,25 @@ export default function BookCreationView({
         </button>
 
         <button
+          onClick={() => setActiveTab('excel')}
+          className={`pb-3 transition-colors shrink-0 flex items-center gap-1.5 ${
+            activeTab === 'excel'
+              ? 'text-emerald-700 font-bold border-b-2 border-emerald-600'
+              : 'text-zinc-500 hover:text-zinc-900'
+          }`}
+        >
+          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Excel Upload & Parser</span>
+          {parsedBooks.length > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold">
+              {parsedBooks.length}
+            </span>
+          )}
+        </button>
+
+        <button
           onClick={() => setActiveTab('categories')}
-          className={`pb-3 transition-colors ${
+          className={`pb-3 transition-colors shrink-0 ${
             activeTab === 'categories'
               ? 'text-zinc-900 font-bold border-b-2 border-zinc-900'
               : 'text-zinc-500 hover:text-zinc-900'
@@ -325,24 +700,24 @@ export default function BookCreationView({
                     const copiesCount = book.total !== undefined ? book.total : (book.total_copies || 1);
                     const copiesList = Array.isArray(book.copies_detail) && book.copies_detail.length > 0
                       ? book.copies_detail
-                      : generateSequentialCopiesList(copiesCount, (book.category_code || (book.category || 'GEN').slice(0, 3)).toUpperCase(), '101');
+                      : generateSequentialCopiesList(copiesCount, book.accession || (index + 1));
 
                     return (
-                      <tr key={`${book.id || book._id || 'book'}-${index}`} className="hover:bg-zinc-50/70 transition-colors">
-                        <td className="py-3 px-3">
-                          <div className="font-semibold text-zinc-900">{book.title}</div>
-                          <div className="text-[11px] text-zinc-400 mt-0.5">{book.author}</div>
+                      <tr key={book.id || book._id || index} className="hover:bg-zinc-50/70 transition-colors">
+                        <td className="py-3.5 px-3 max-w-[220px]">
+                          <div className="font-semibold text-zinc-900 truncate">{book.title}</div>
+                          <div className="text-[11px] text-zinc-500 truncate mt-0.5">{book.author}</div>
                         </td>
 
-                        <td className="py-3 px-3 text-zinc-600">
-                          <span className="px-2 py-0.5 rounded text-[11px] bg-zinc-100 text-zinc-800 font-medium border border-zinc-200">
-                            {book.category}
+                        <td className="py-3.5 px-3">
+                          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-zinc-100 text-zinc-800 border border-zinc-200">
+                            {book.category || 'General'}
                           </span>
                         </td>
 
-                        <td className="py-3 px-3 font-mono text-[11px]">
-                          <div className="font-medium text-zinc-800">{book.accession}</div>
-                          <div className="text-[10px] text-zinc-400">{book.barcode}</div>
+                        <td className="py-3.5 px-3 font-mono text-zinc-700">
+                          <div className="font-semibold">{book.accession}</div>
+                          {book.barcode && <div className="text-[10px] text-zinc-400">{book.barcode}</div>}
                         </td>
 
                         <td className="py-3 px-3 text-center">
@@ -351,34 +726,36 @@ export default function BookCreationView({
                           </span>
                         </td>
 
-                        <td className="py-3 px-3 text-zinc-600">
-                          <div className="flex items-center gap-1">
-                            <MapPin className="w-3 h-3 text-zinc-400" />
-                            <span>{book.shelf}</span>
-                          </div>
+                        <td className="py-3.5 px-3 text-zinc-600 font-mono text-[11px]">
+                          {book.shelf || 'Central Stack'}
                         </td>
 
                         <td className="py-3 px-3">
                           <div className="flex flex-wrap gap-1 max-w-xs">
                             {copiesList.slice(0, 3).map((cp, idx) => (
                               <span key={idx} className="font-mono text-[10px] bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200 font-medium">
-                                {cp.serial_no}
+                                {cp.serial_no || cp.accession || `#${cp.copy_number}`}
                               </span>
                             ))}
                             {copiesList.length > 3 && (
-                              <span className="text-[10px] text-zinc-500 font-medium px-1 py-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setViewingCopiesBook({ ...book, copies_detail: copiesList })}
+                                className="font-mono text-[10px] bg-zinc-100 hover:bg-zinc-200 px-1.5 py-0.5 rounded text-zinc-600 border border-zinc-200 transition-colors cursor-pointer"
+                              >
                                 +{copiesList.length - 3} more
-                              </span>
+                              </button>
                             )}
                           </div>
                         </td>
 
-                        <td className="py-3 px-3 text-right">
+                        <td className="py-3.5 px-3 text-right">
                           <button
+                            type="button"
                             onClick={() => setViewingCopiesBook({ ...book, copies_detail: copiesList })}
-                            className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-white rounded text-[11px] font-medium transition-colors"
+                            className="px-2.5 py-1 border border-zinc-200 hover:bg-zinc-100 rounded-lg text-zinc-700 text-xs font-medium transition-colors"
                           >
-                            View All Copies
+                            Copies ({copiesList.length})
                           </button>
                         </td>
                       </tr>
@@ -460,6 +837,312 @@ export default function BookCreationView({
       )}
 
       {/* ============================================================ */}
+      {/* TAB 3: EXCEL UPLOAD & SPREADSHEET PARSER */}
+      {/* ============================================================ */}
+      {activeTab === 'excel' && (
+        <div className="space-y-6">
+          {/* Header & Template Download */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-gradient-to-r from-emerald-50/60 via-white to-white border border-emerald-200/80 rounded-2xl shadow-xs">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </span>
+                <h2 className="text-base font-bold text-zinc-900">
+                  Excel Book Parser & Bulk Uploader
+                </h2>
+              </div>
+              <p className="text-xs text-zinc-500 max-w-2xl leading-relaxed">
+                Upload existing books from Excel (.xlsx, .xls) or CSV. Accepts college software exports with columns like <code className="font-mono text-emerald-700 font-semibold">Title Id, title Name, authorName, Alm WS.ID, publisher Name, Place Of Publication, Year Of Publication, Class/call No, Category Name</code>. All fields and <strong className="text-zinc-800">Category are completely optional</strong>.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleDownloadSampleExcel}
+              className="px-4 py-2.5 bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-xs shrink-0 self-start sm:self-auto"
+            >
+              <Download className="w-4 h-4 text-emerald-600" />
+              <span>Download Sample Template (.xlsx)</span>
+            </button>
+          </div>
+
+          {/* Import Success Notification */}
+          {importCompleted && (
+            <div className="p-5 bg-emerald-50 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-lg shrink-0">
+                  <CheckCircle className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-emerald-950">Bulk Import Successful!</h3>
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    {importCount} books were accessioned and stored in the database.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('all_books')}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-xs"
+                >
+                  <BookOpen className="w-4 h-4" />
+                  <span>View in All Books</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportCompleted(false);
+                    setUploadedFileName('');
+                  }}
+                  className="px-3.5 py-2 bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-semibold transition-colors"
+                >
+                  Upload Another File
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* File Upload Zone */}
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDropFile}
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-emerald-200 hover:border-emerald-400 bg-emerald-50/20 hover:bg-emerald-50/40 rounded-2xl p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3"
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-xs">
+              <UploadCloud className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="font-bold text-sm text-zinc-900">
+                {uploadedFileName ? `Selected: ${uploadedFileName}` : 'Click to select or drag & drop Excel / CSV file'}
+              </p>
+              <p className="text-xs text-zinc-500 mt-1">
+                Supports .xlsx, .xls, .csv files exported from existing library systems
+              </p>
+            </div>
+            <span className="px-3 py-1 bg-white border border-emerald-200 text-emerald-700 rounded-lg text-xs font-semibold shadow-xs">
+              {isParsingExcel ? 'Parsing spreadsheet...' : 'Browse Computer Files'}
+            </span>
+          </div>
+
+          {/* Parsed Books Review & Settings Panel */}
+          {parsedBooks.length > 0 && (
+            <div className="bg-white border border-zinc-200 rounded-2xl shadow-sm p-6 space-y-5">
+              {/* Summary Metrics & Actions Strip */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-100">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span className="px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold rounded-lg text-xs">
+                    {parseSummary?.totalTitles || parsedBooks.length} Book Titles Ready
+                  </span>
+                  <span className="px-3 py-1 bg-blue-50 border border-blue-200 text-blue-800 font-bold rounded-lg text-xs">
+                    {parseSummary?.totalCopies || parsedBooks.reduce((s, b) => s + b.total, 0)} Physical Copies
+                  </span>
+                  {(parseSummary?.skippedRows || 0) > 0 && (
+                    <span className="px-2.5 py-1 bg-zinc-100 border border-zinc-200 text-zinc-600 rounded-lg text-xs">
+                      {parseSummary.skippedRows} Status/Header Rows Skipped
+                    </span>
+                  )}
+                  <span className="text-xs text-zinc-400">
+                    File: <strong className="text-zinc-700">{uploadedFileName}</strong>
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setParsedBooks([]);
+                      setUploadedFileName('');
+                      setParseSummary(null);
+                    }}
+                    className="px-3.5 py-2 border border-zinc-200 hover:bg-zinc-100 text-zinc-600 rounded-xl text-xs font-semibold transition-colors"
+                  >
+                    Clear File
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isImporting || parsedBooks.length === 0}
+                    onClick={handleConfirmImport}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-sm shadow-emerald-600/20"
+                  >
+                    {isImporting ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <Check className="w-4 h-4" />
+                    )}
+                    <span>Confirm & Import All {parsedBooks.length} Titles ({parseSummary?.totalCopies || parsedBooks.reduce((s, b) => s + b.total, 0)} Copies)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Upload Defaults Configuration Strip (Category optional) */}
+              <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-xl grid sm:grid-cols-3 gap-4 text-xs">
+                <div>
+                  <label className="block font-medium text-zinc-700 mb-1">
+                    Fallback Category (Optional)
+                  </label>
+                  <select
+                    value={defaultUploadCategory}
+                    onChange={(e) => setDefaultUploadCategory(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-emerald-600"
+                  >
+                    <option value="">General (Default for rows without category)</option>
+                    {categories.map(c => (
+                      <option key={c.id || c.name} value={c.name}>
+                        {c.name} [{c.code}]
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-0.5 block">Applied if Category column is empty in row</span>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-zinc-700 mb-1">
+                    Default Shelf / Rack
+                  </label>
+                  <input
+                    type="text"
+                    value={defaultUploadShelf}
+                    onChange={(e) => setDefaultUploadShelf(e.target.value)}
+                    placeholder="Central Stack"
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-emerald-600"
+                  />
+                  <span className="text-[10px] text-zinc-400 mt-0.5 block">Used when Alm WS.ID/Shelf is empty</span>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-zinc-700 mb-1">
+                    Default Copies per Book
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={defaultUploadCopies}
+                    onChange={(e) => setDefaultUploadCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-emerald-600"
+                  />
+                  <span className="text-[10px] text-zinc-400 mt-0.5 block">Used when Copies/Qty is omitted</span>
+                </div>
+              </div>
+
+              {/* Search Filter in Parsed Rows */}
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input
+                  type="text"
+                  value={excelSearchTerm}
+                  onChange={(e) => setExcelSearchTerm(e.target.value)}
+                  placeholder="Filter parsed books by title, author, accession, or category..."
+                  className="w-full pl-9 pr-4 py-2 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              {/* Interactive Parsed Books Table */}
+              <div className="border border-zinc-200 rounded-xl overflow-hidden max-h-[420px] overflow-y-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold sticky top-0 z-10">
+                    <tr>
+                      <th className="py-2.5 px-3">#</th>
+                      <th className="py-2.5 px-3">Book Title & TitleId</th>
+                      <th className="py-2.5 px-3">Copies Count</th>
+                      <th className="py-2.5 px-3">Accession / Serial Numbers</th>
+                      <th className="py-2.5 px-3">Author & Publisher</th>
+                      <th className="py-2.5 px-3">Category (Optional)</th>
+                      <th className="py-2.5 px-3">Shelf</th>
+                      <th className="py-2.5 px-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100">
+                    {parsedBooks
+                      .filter(b => {
+                        if (!excelSearchTerm) return true;
+                        const q = excelSearchTerm.toLowerCase();
+                        return (
+                          b.title.toLowerCase().includes(q) ||
+                          b.author.toLowerCase().includes(q) ||
+                          b.accession.toLowerCase().includes(q) ||
+                          b.category.toLowerCase().includes(q) ||
+                          (b.titleId && b.titleId.toLowerCase().includes(q))
+                        );
+                      })
+                      .map((book) => (
+                        <tr
+                          key={book.id}
+                          className="hover:bg-zinc-50/70 transition-colors"
+                        >
+                          <td className="py-2.5 px-3 text-[11px] text-zinc-400 font-mono">
+                            {book.rowNumber}
+                          </td>
+                          <td className="py-2.5 px-3 max-w-[220px]">
+                            <div className="font-bold text-zinc-900 truncate">{book.title}</div>
+                            {book.titleId && (
+                              <span className="text-[10px] text-blue-700 font-mono font-medium">
+                                TitleId: {book.titleId}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                              {book.total} {book.total === 1 ? 'Copy' : 'Copies'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="font-mono font-bold text-zinc-900">{book.accession}</div>
+                            {book.copies_detail && book.copies_detail.length > 1 && (
+                              <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                                Serials: {book.copies_detail.map(c => c.accession).join(', ')}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-zinc-600 max-w-[170px] truncate">
+                            <div className="font-medium text-zinc-800 truncate">{book.author}</div>
+                            <div className="text-[11px] text-zinc-400 truncate">{book.publisher} ({book.edition})</div>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {book.hasFileCategory ? (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                {book.category}
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] text-zinc-500 bg-zinc-100 border border-zinc-200">
+                                {defaultUploadCategory || 'General (Default)'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-zinc-600 font-mono text-[11px]">
+                            {book.shelf || defaultUploadShelf}
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteParsedRow(book.id)}
+                              className="p-1 text-zinc-400 hover:text-rose-600 transition-colors"
+                              title="Remove from import"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ============================================================ */}
       {/* POPUP 1: CREATE BOOK MODAL (WITH SEQUENTIAL COPIES PREVIEW) */}
       {/* ============================================================ */}
       {isCreateBookModalOpen && (
@@ -512,7 +1195,7 @@ export default function BookCreationView({
               <div className="grid sm:grid-cols-2 gap-4">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="font-medium text-zinc-700">Category (Dynamic) *</label>
+                    <label className="font-medium text-zinc-700">Category (Optional)</label>
                     <button
                       type="button"
                       onClick={() => setIsCategoryModalOpen(true)}
@@ -521,60 +1204,77 @@ export default function BookCreationView({
                       + New Category
                     </button>
                   </div>
-                  {categories.length === 0 ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-zinc-400 italic">No categories yet.</span>
-                      <button
-                        type="button"
-                        onClick={() => setIsCategoryModalOpen(true)}
-                        className="px-2 py-1 bg-zinc-900 text-white rounded text-[11px] font-medium"
-                      >
-                        + Create Category First
-                      </button>
-                    </div>
-                  ) : (
-                    <select
-                      value={selectedCategoryName || categories[0]?.name}
-                      onChange={(e) => setSelectedCategoryName(e.target.value)}
-                      className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-zinc-900"
-                    >
-                      {categories.map(c => (
-                        <option key={c.id || c.name} value={c.name}>
-                          {c.name} [Code: {c.code}]
-                        </option>
-                      ))}
-                    </select>
-                  )}
+                  <select
+                    value={selectedCategoryName}
+                    onChange={(e) => setSelectedCategoryName(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-zinc-900"
+                  >
+                    <option value="">General (Default - No category specified)</option>
+                    {categories.map(c => (
+                      <option key={c.id || c.name} value={c.name}>
+                        {c.name} [Code: {c.code}]
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-0.5 block">
+                    Optional. Default is General category.
+                  </span>
                 </div>
 
-                <div>
-                  <label className="block font-medium text-zinc-700 mb-1">
-                    Total Copies to Generate *
-                  </label>
-                  <div className="flex items-center gap-2">
+                                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-medium text-zinc-700 mb-1">
+                      Total Copies to Generate *
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        required
+                        value={copies}
+                        onChange={(e) => setCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 font-bold focus:outline-none focus:border-zinc-900"
+                      />
+                      <div className="flex items-center gap-1">
+                        {[1, 2, 4, 10].map(cnt => (
+                          <button
+                            key={cnt}
+                            type="button"
+                            onClick={() => setCopies(cnt)}
+                            className={`px-2 py-1 border rounded text-[11px] font-medium ${
+                              copies === cnt ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                            }`}
+                          >
+                            {cnt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-medium text-zinc-700">
+                        Starting Serial / Accession *
+                      </label>
+                      {latestCatalogSerial > 0 && (
+                        <span className="text-[10px] text-blue-600 font-semibold">
+                          Next after #{latestCatalogSerial}
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="number"
                       min="1"
-                      max="100"
                       required
-                      value={copies}
-                      onChange={(e) => setCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 font-bold focus:outline-none focus:border-zinc-900"
+                      value={startSerial}
+                      onChange={(e) => setStartSerial(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs font-mono font-bold text-zinc-900 focus:outline-none focus:border-zinc-900"
                     />
-                    <div className="flex items-center gap-1">
-                      {[1, 2, 4, 10].map(cnt => (
-                        <button
-                          key={cnt}
-                          type="button"
-                          onClick={() => setCopies(cnt)}
-                          className={`px-2 py-1 border rounded text-[11px] font-medium ${
-                            copies === cnt ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'
-                          }`}
-                        >
-                          {cnt}
-                        </button>
-                      ))}
-                    </div>
+                    <span className="text-[10px] text-zinc-400 mt-0.5 block">
+                      Following from the end of catalog serial numbers
+                    </span>
                   </div>
                 </div>
               </div>
@@ -609,35 +1309,21 @@ export default function BookCreationView({
                     type="text"
                     value={publisher}
                     onChange={(e) => setPublisher(e.target.value)}
-                    placeholder="Wiley, Pearson, etc."
+                    placeholder="BPB Publication, Wiley, etc."
                     className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-xs"
                   />
                 </div>
               </div>
 
-              {/* ============================================================ */}
               {/* SEQUENTIAL COPIES & SERIAL NUMBER PREVIEW IN POPUP */}
-              {/* ============================================================ */}
               <div className="p-3.5 bg-zinc-50 border border-zinc-200 rounded-lg space-y-2">
                 <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-zinc-900 uppercase tracking-wider text-[11px]">
-                      Sequential Copy Allocation ({sequentialCopies.length} Copies Generated)
-                    </span>
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-200 text-zinc-800">
-                      Code: {currentCode}
-                    </span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleRegenerateCodes}
-                    className="text-[11px] text-zinc-500 hover:text-zinc-900 flex items-center gap-1 font-medium"
-                    title="Regenerate Sequence IDs"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    <span>Regenerate Codes</span>
-                  </button>
+                  <span className="font-bold text-zinc-900 uppercase tracking-wider text-[11px]">
+                    Sequential Copy Allocation ({sequentialCopies.length} Copies Generated)
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-blue-100 text-blue-800 font-bold">
+                    Accession Range: #{sequentialCopies[0]?.accession} to #{sequentialCopies[sequentialCopies.length - 1]?.accession}
+                  </span>
                 </div>
 
                 <div className="max-h-40 overflow-y-auto divide-y divide-zinc-200 border border-zinc-200 rounded-md bg-white">
@@ -648,22 +1334,19 @@ export default function BookCreationView({
                           {cp.copy_number}
                         </span>
                         <div>
-                          <span className="font-mono font-bold text-zinc-900">{cp.serial_no}</span>
-                          <span className="text-[10px] text-zinc-400 ml-2">Accession: {cp.accession}</span>
+                          <span className="font-mono font-bold text-zinc-900">Accession & Serial #{cp.accession}</span>
+                          <span className="text-[10px] text-zinc-400 ml-2 font-mono">Barcode: {cp.barcode}</span>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] text-zinc-500">{cp.barcode}</span>
-                        <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          {cp.status}
-                        </span>
-                      </div>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        {cp.status}
+                      </span>
                     </div>
                   ))}
                 </div>
                 <span className="text-[10px] text-zinc-400 block">
-                  Every single physical copy is assigned its own unique serial number and barcode for tracking, checkout, and inventory auditing.
+                  Every copy is assigned its sequential accession and serial number following directly from the latest serial number in the library catalog.
                 </span>
               </div>
 

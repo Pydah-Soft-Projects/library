@@ -1,69 +1,113 @@
 import React, { useState, useEffect } from 'react';
-import { Save, RotateCcw, Clock, Building2, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { Save, RotateCcw, Clock, Building2, ShieldCheck, CheckCircle2, RefreshCw } from 'lucide-react';
 
 export default function SettingsView({
   authToken,
   currentUser,
   onToast
 }) {
-  const [defaultLoanDays, setDefaultLoanDays] = useState(30);
-  const [dailyFineRate, setDailyFineRate] = useState(5.0);
-  const [maxBooksQuota, setMaxBooksQuota] = useState(4);
-  const [maxRenewals, setMaxRenewals] = useState(2);
+  // Read instant cached settings from localStorage to eliminate any flicker of default old data on reload
+  const getInitialSettings = () => {
+    try {
+      const saved = localStorage.getItem('lm_system_settings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  };
 
-  const [libraryName, setLibraryName] = useState('Central Campus Academic Library');
-  const [deskEmail, setDeskEmail] = useState('circulation@college.edu.in');
-  const [operatingHours, setOperatingHours] = useState('08:30 AM – 08:00 PM (Mon – Sat)');
+  const initial = getInitialSettings();
+
+  const [defaultLoanDays, setDefaultLoanDays] = useState(initial?.default_loan_days ?? 30);
+  const [dailyFineRate, setDailyFineRate] = useState(initial?.daily_fine_rate ?? 5.0);
+  const [maxBooksQuota, setMaxBooksQuota] = useState(initial?.max_books_quota ?? 4);
+  const [maxRenewals, setMaxRenewals] = useState(initial?.max_renewals ?? 2);
+
+  const [libraryName, setLibraryName] = useState(initial?.library_name || 'Central Campus Academic Library');
+  const [deskEmail, setDeskEmail] = useState(initial?.desk_email || 'circulation@college.edu.in');
+  const [operatingHours, setOperatingHours] = useState(initial?.operating_hours || '08:30 AM – 08:00 PM (Mon – Sat)');
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastSynced, setLastSynced] = useState(null);
 
-  // Load settings live from MongoDB Atlas database
-  useEffect(() => {
-    fetch('/api/settings')
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.settings) {
-          const s = data.settings;
-          if (s.default_loan_days !== undefined) setDefaultLoanDays(s.default_loan_days);
-          if (s.daily_fine_rate !== undefined) setDailyFineRate(s.daily_fine_rate);
-          if (s.max_books_quota !== undefined) setMaxBooksQuota(s.max_books_quota);
-          if (s.max_renewals !== undefined) setMaxRenewals(s.max_renewals);
-          if (s.library_name) setLibraryName(s.library_name);
-          if (s.desk_email) setDeskEmail(s.desk_email);
-          if (s.operating_hours) setOperatingHours(s.operating_hours);
+  // Load fresh settings live from MongoDB Atlas database (bypassing any browser cache)
+  const loadSettingsFromDB = async (showToast = false) => {
+    setRefreshing(true);
+    try {
+      const res = await fetch(`/api/settings?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         }
-      })
-      .catch(err => {
-        console.error('Failed to load settings:', err);
-      })
-      .finally(() => {
-        setLoading(false);
       });
+      const data = await res.json();
+      if (data && data.settings) {
+        const s = data.settings;
+        if (s.default_loan_days !== undefined) setDefaultLoanDays(s.default_loan_days);
+        if (s.daily_fine_rate !== undefined) setDailyFineRate(s.daily_fine_rate);
+        if (s.max_books_quota !== undefined) setMaxBooksQuota(s.max_books_quota);
+        if (s.max_renewals !== undefined) setMaxRenewals(s.max_renewals);
+        if (s.library_name) setLibraryName(s.library_name);
+        if (s.desk_email) setDeskEmail(s.desk_email);
+        if (s.operating_hours) setOperatingHours(s.operating_hours);
+
+        // Keep local storage in sync with live DB settings
+        try {
+          localStorage.setItem('lm_system_settings', JSON.stringify(s));
+        } catch {}
+
+        setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        if (showToast && onToast) {
+          onToast('Settings refreshed directly from MongoDB Atlas!', 'success');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+      if (showToast && onToast) {
+        onToast('Failed to refresh settings: ' + err.message, 'danger');
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSettingsFromDB(false);
   }, []);
 
   const handleSavePolicies = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     setSaving(true);
+
+    const payload = {
+      default_loan_days: Number(defaultLoanDays),
+      daily_fine_rate: Number(dailyFineRate),
+      max_books_quota: Number(maxBooksQuota),
+      max_renewals: Number(maxRenewals),
+      library_name: libraryName,
+      desk_email: deskEmail,
+      operating_hours: operatingHours
+    };
+
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache',
           ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
         },
-        body: JSON.stringify({
-          default_loan_days: Number(defaultLoanDays),
-          daily_fine_rate: Number(dailyFineRate),
-          max_books_quota: Number(maxBooksQuota),
-          max_renewals: Number(maxRenewals),
-          library_name: libraryName,
-          desk_email: deskEmail,
-          operating_hours: operatingHours
-        })
+        body: JSON.stringify(payload)
       });
 
       const data = await res.json();
       if (res.ok) {
+        const updated = data.settings || payload;
+        try {
+          localStorage.setItem('lm_system_settings', JSON.stringify(updated));
+        } catch {}
+        setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         if (onToast) onToast('Settings saved to MongoDB Atlas database successfully!', 'success');
       } else {
         if (onToast) onToast(data.error || 'Failed to save settings.', 'danger');
@@ -84,18 +128,33 @@ export default function SettingsView({
             Settings
           </h1>
           <p className="text-xs text-zinc-500 mt-1">
-            Configure institutional lending rules, daily overdue fines, and system status (saved in database)
+            Configure institutional lending rules, daily overdue fines, and system status (saved in live database)
+            {lastSynced && <span className="ml-2 text-emerald-600 font-medium">• Last synced: {lastSynced}</span>}
           </p>
         </div>
 
-        <button
-          onClick={handleSavePolicies}
-          disabled={saving}
-          className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
-        >
-          <Save className="w-3.5 h-3.5" />
-          <span>{saving ? 'Saving...' : 'Save Settings'}</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => loadSettingsFromDB(true)}
+            disabled={refreshing}
+            className="px-3 py-2 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:opacity-50 text-zinc-700 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+            title="Reload latest settings from database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-zinc-500 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>{refreshing ? 'Refreshing...' : 'Refresh from DB'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSavePolicies}
+            disabled={saving}
+            className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Flat Aligned Layout */}
@@ -256,6 +315,7 @@ export default function SettingsView({
                   localStorage.removeItem('lm_loans');
                   localStorage.removeItem('lm_fines');
                   localStorage.removeItem('lm_categories');
+                  localStorage.removeItem('lm_system_settings');
                   window.location.reload();
                 }
               }}

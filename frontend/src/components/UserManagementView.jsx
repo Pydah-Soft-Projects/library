@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Search, Plus, ShieldCheck, Lock, Unlock, 
   Settings, Check, X, Shield, RefreshCw, Filter,
@@ -25,6 +25,41 @@ const ROLE_COLORS = {
   amber: 'bg-amber-50 text-amber-700 border-amber-200',
   rose: 'bg-rose-50 text-rose-700 border-rose-200'
 };
+
+const DEFAULT_ROLES = [
+  {
+    id: 'librarian',
+    name: 'Librarian',
+    description: 'Catalog management, book creation, circulation desk and lending operations',
+    color: 'blue',
+    is_system: false,
+    page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns']
+  },
+  {
+    id: 'circulation_staff',
+    name: 'Circulation Staff',
+    description: 'Student verification, 30-day lending window, returns and fine assessment',
+    color: 'emerald',
+    is_system: false,
+    page_privileges: ['dashboard', 'all_books', 'book_issues_returns']
+  },
+  {
+    id: 'catalog_assistant',
+    name: 'Catalog Assistant',
+    description: 'Book holdings registration, barcode generation, and accessioning',
+    color: 'purple',
+    is_system: false,
+    page_privileges: ['dashboard', 'book_creation', 'all_books']
+  },
+  {
+    id: 'superadmin',
+    name: 'Superadmin',
+    description: 'Full sovereign governance, user management, and system policies',
+    color: 'zinc',
+    is_system: true,
+    page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
+  }
+];
 
 export default function UserManagementView({ onToast }) {
   const [activeTab, setActiveTab] = useState('mapped_users'); // 'mapped_users' | 'roles'
@@ -62,12 +97,15 @@ export default function UserManagementView({ onToast }) {
   const [changeRoleUser, setChangeRoleUser] = useState(null);
 
   // Create User Form State (HRMS ID Mapping)
+  const [hrmsSearchResults, setHrmsSearchResults] = useState([]);
+  const [isHrmsDropdownOpen, setIsHrmsDropdownOpen] = useState(false);
+  const hrmsDropdownRef = useRef(null);
   const [userForm, setUserForm] = useState({
     emp_no: '',
     verifiedEmployee: null,
     verifying: false,
-    role_name: 'Student / Patron',
-    page_privileges: ['dashboard', 'all_books']
+    role_name: 'Librarian',
+    page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns']
   });
 
   // Create Role Form State
@@ -82,19 +120,17 @@ export default function UserManagementView({ onToast }) {
   const loadData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch mapped user assignments from HrmsUserRole
+      // Strictly fetch mapped library staff users from HRMS assignments
       const assignRes = await fetch('/api/roles/assignments');
       const assignData = await assignRes.json();
       if (assignData && Array.isArray(assignData.users)) {
         setMappedUsers(assignData.users);
       } else if (assignData && assignData.assignments) {
-        // Fallback: Map from dictionary
         const list = Object.keys(assignData.assignments).map(empNo => ({
           emp_no: empNo,
           name: assignData.assignments[empNo].employee_name || `Employee #${empNo}`,
           department: assignData.assignments[empNo].department || 'General',
           division: assignData.assignments[empNo].division || '',
-          email: `${empNo.toLowerCase()}@pydah.edu.in`,
           role: assignData.assignments[empNo].role_name,
           page_privileges: assignData.assignments[empNo].page_privileges || ['dashboard', 'all_books'],
           assigned_by: assignData.assignments[empNo].assigned_by,
@@ -103,27 +139,32 @@ export default function UserManagementView({ onToast }) {
         setMappedUsers(list);
       }
 
-      // 2. Fetch Roles
+      // 2. Fetch Roles (merged with standard library roles)
       const roleRes = await fetch('/api/roles');
       const roleData = await roleRes.json();
+      const seen = new Set();
+      const mergedRoles = [];
+
       if (roleData && Array.isArray(roleData.roles)) {
-        const seen = new Set();
-        const unique = [];
         for (const r of roleData.roles) {
           const norm = (r.name || '').trim().toLowerCase();
           if (!seen.has(norm)) {
             seen.add(norm);
-            unique.push(r);
+            mergedRoles.push(r);
           }
         }
-        setRoles(unique);
-        if (unique.length > 0) {
-          setUserForm(prev => ({
-            ...prev,
-            role_name: prev.role_name === 'Faculty / Scholar' ? unique[0].name : prev.role_name
-          }));
+      }
+
+      // Add baseline library roles if not yet returned by DB
+      for (const dr of DEFAULT_ROLES) {
+        const norm = dr.name.toLowerCase();
+        if (!seen.has(norm)) {
+          seen.add(norm);
+          mergedRoles.push(dr);
         }
       }
+
+      setRoles(mergedRoles);
 
       // 3. Fetch HRMS Departments
       const deptRes = await fetch('/api/hrms/departments');
@@ -142,48 +183,55 @@ export default function UserManagementView({ onToast }) {
     loadData();
   }, []);
 
-  // Live HRMS lookup when user types in Create User modal
-  const handleVerifyHrmsId = async (empNoToVerify) => {
-    const cleanId = String(empNoToVerify || '').trim();
-    if (!cleanId) return;
-
-    setUserForm(prev => ({ ...prev, verifying: true }));
-    try {
-      const res = await fetch(`/api/hrms/employees/${cleanId}`);
-      const data = await res.json();
-      if (res.ok && data.employee) {
-        setUserForm(prev => ({
-          ...prev,
-          emp_no: cleanId,
-          verifiedEmployee: data.employee,
-          verifying: false
-        }));
-      } else {
-        // Try search query if direct ID not found
-        const searchRes = await fetch(`/api/hrms/employees?search=${cleanId}&limit=1`);
-        const searchData = await searchRes.json();
-        if (searchData.employees && searchData.employees.length > 0) {
-          const emp = searchData.employees[0];
-          setUserForm(prev => ({
-            ...prev,
-            emp_no: emp.emp_no,
-            verifiedEmployee: emp,
-            verifying: false
-          }));
-        } else {
-          setUserForm(prev => ({
-            ...prev,
-            verifiedEmployee: null,
-            verifying: false
-          }));
-          if (onToast) onToast(`No HRMS employee found with ID "${cleanId}".`, 'danger');
-        }
-      }
-    } catch (err) {
+  // Dynamic live HRMS lookup: shows all users matching that number as you type
+  const hrmsDebounceRef = useRef(null);
+  useEffect(() => {
+    const cleanId = String(userForm.emp_no || '').trim();
+    if (!cleanId) {
+      setHrmsSearchResults([]);
+      setIsHrmsDropdownOpen(false);
       setUserForm(prev => ({ ...prev, verifying: false }));
-      if (onToast) onToast('Failed to connect to HRMS database: ' + err.message, 'danger');
+      return;
     }
-  };
+
+    if (userForm.verifiedEmployee && (String(userForm.verifiedEmployee.emp_no) === cleanId || String(userForm.verifiedEmployee.hrms_id) === cleanId)) {
+      return;
+    }
+
+    clearTimeout(hrmsDebounceRef.current);
+    setUserForm(prev => ({ ...prev, verifying: true }));
+
+    hrmsDebounceRef.current = setTimeout(async () => {
+      try {
+        const searchRes = await fetch('/api/hrms/employees?search=' + encodeURIComponent(cleanId) + '&limit=25');
+        const searchData = await searchRes.json();
+        if (searchData.employees && Array.isArray(searchData.employees)) {
+          setHrmsSearchResults(searchData.employees);
+          setIsHrmsDropdownOpen(true);
+        } else {
+          setHrmsSearchResults([]);
+        }
+      } catch (err) {
+        console.warn('HRMS search error:', err.message);
+        setHrmsSearchResults([]);
+      } finally {
+        setUserForm(prev => ({ ...prev, verifying: false }));
+      }
+    }, 200);
+
+    return () => clearTimeout(hrmsDebounceRef.current);
+  }, [userForm.emp_no, userForm.verifiedEmployee]);
+
+  // Click outside listener to dismiss HRMS search dropdown
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (hrmsDropdownRef.current && !hrmsDropdownRef.current.contains(e.target)) {
+        setIsHrmsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Helper when role changes in Create User Form
   const handleRoleChangeInForm = (newRoleName) => {
@@ -773,7 +821,7 @@ export default function UserManagementView({ onToast }) {
                           {user.division && (
                             <div className="text-[11px] text-zinc-500 font-medium">{user.division}</div>
                           )}
-                          <span className="text-[10px] text-zinc-400 font-mono block mt-0.5">{user.email}</span>
+                          
                         </td>
 
                         {/* Role */}
@@ -995,48 +1043,114 @@ export default function UserManagementView({ onToast }) {
             </div>
 
             <form onSubmit={handleCreateUserSubmit} className="space-y-4 text-xs">
-              {/* HRMS Employee ID Lookup */}
-              <div>
+              {/* HRMS Employee ID Lookup (Shows all matching users with that number while typing) */}
+              <div className="relative" ref={hrmsDropdownRef}>
                 <label className="block font-medium text-zinc-700 mb-1">
                   HRMS Employee ID / Number *
                 </label>
-                <div className="flex gap-2">
+                <div className="relative">
                   <input
                     type="text"
                     required
                     value={userForm.emp_no}
                     onChange={(e) => {
-                      setUserForm({ ...userForm, emp_no: e.target.value.trim(), verifiedEmployee: null });
+                      const val = e.target.value;
+                      setUserForm(prev => ({ ...prev, emp_no: val, verifiedEmployee: null }));
+                      setIsHrmsDropdownOpen(true);
                     }}
-                    placeholder="e.g. 9009, 171, or 1"
-                    className="flex-1 px-3 py-2 border border-zinc-200 rounded-lg text-xs font-mono text-zinc-900 focus:outline-none focus:border-zinc-900"
+                    onFocus={() => {
+                      if (hrmsSearchResults.length > 0 && !userForm.verifiedEmployee) {
+                        setIsHrmsDropdownOpen(true);
+                      }
+                    }}
+                    placeholder="Type HRMS number (e.g. 111, 2145, 171, 0151)..."
+                    className="w-full pl-3 pr-10 py-2 border border-zinc-200 rounded-lg text-xs font-mono text-zinc-900 focus:outline-none focus:border-zinc-900"
                   />
-                  <button
-                    type="button"
-                    onClick={() => handleVerifyHrmsId(userForm.emp_no)}
-                    disabled={userForm.verifying || !userForm.emp_no}
-                    className="px-3.5 py-2 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50 text-zinc-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                  >
-                    {userForm.verifying ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                    <span>Verify ID</span>
-                  </button>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
+                    {userForm.verifying ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                    ) : userForm.verifiedEmployee ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <Search className="w-3.5 h-3.5 text-zinc-400" />
+                    )}
+                  </div>
                 </div>
                 <span className="text-[10px] text-zinc-400 mt-1 block">
-                  Connects to live HRMS cluster to pull official employee name and department without storing duplicate records.
+                  Type any number to show all matching HRMS users, then select one to assign library privileges.
                 </span>
+
+                {/* Dropdown: Shows all matching users with that number */}
+                {isHrmsDropdownOpen && !userForm.verifiedEmployee && userForm.emp_no && (
+                  <div className="absolute left-0 right-0 mt-1 bg-white border border-zinc-200 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto divide-y divide-zinc-100 p-1">
+                    <div className="px-3 py-1.5 text-[10px] font-semibold text-blue-600 uppercase tracking-wider flex items-center justify-between">
+                      <span>Matching HRMS Employees ({hrmsSearchResults.length})</span>
+                      <span className="text-zinc-400 font-normal">Select an employee</span>
+                    </div>
+
+                    {hrmsSearchResults.length > 0 ? (
+                      hrmsSearchResults.map(emp => (
+                        <div
+                          key={emp.hrms_id || emp.emp_no}
+                          onClick={() => {
+                            setUserForm(prev => ({
+                              ...prev,
+                              emp_no: emp.emp_no,
+                              verifiedEmployee: emp
+                            }));
+                            setIsHrmsDropdownOpen(false);
+                          }}
+                          className="p-2.5 hover:bg-blue-50/70 rounded-lg cursor-pointer transition-colors flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="overflow-hidden">
+                            <div className="font-bold text-zinc-900 flex items-center gap-1.5 truncate">
+                              <span>{emp.name || emp.employee_name}</span>
+                              <span className="font-mono text-[10px] px-1.5 py-0.2 bg-zinc-100 text-zinc-700 rounded border border-zinc-200">
+                                #{emp.emp_no}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 mt-0.5 truncate">
+                              <span>{emp.department || 'General'}</span>
+                              {emp.division && <span>• {emp.division}</span>}
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 rounded-md shrink-0">
+                            Select
+                          </span>
+                        </div>
+                      ))
+                    ) : !userForm.verifying ? (
+                      <div className="p-3 text-center text-xs text-zinc-400">
+                        No HRMS employees found matching "{userForm.emp_no}"
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
 
-              {/* Verified Employee Preview Card */}
-              {userForm.verifiedEmployee ? (
+              {/* Verified Employee Preview Card (Strictly without email) */}
+              {userForm.verifiedEmployee && (
                 <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-lg space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-xs text-emerald-950 flex items-center gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                       <span>{userForm.verifiedEmployee.name || userForm.verifiedEmployee.employee_name}</span>
                     </span>
-                    <span className="font-mono text-[10px] bg-white px-2 py-0.5 rounded border border-emerald-200 text-emerald-800">
-                      #{userForm.verifiedEmployee.emp_no}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-[10px] bg-white px-2 py-0.5 rounded border border-emerald-200 text-emerald-800">
+                        #{userForm.verifiedEmployee.emp_no}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserForm(prev => ({ ...prev, verifiedEmployee: null }));
+                          setIsHrmsDropdownOpen(true);
+                        }}
+                        className="text-[10px] text-emerald-700 hover:text-emerald-900 underline font-medium ml-1 cursor-pointer"
+                      >
+                        Change
+                      </button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-[11px] text-emerald-900 pt-1 border-t border-emerald-200/60">
                     <div>
@@ -1048,33 +1162,75 @@ export default function UserManagementView({ onToast }) {
                       <strong>{userForm.verifiedEmployee.department || 'General'}</strong>
                     </div>
                   </div>
-                  <div className="text-[10px] text-emerald-700 font-mono pt-0.5">
-                    Email: {userForm.verifiedEmployee.email || `${userForm.verifiedEmployee.emp_no}@pydah.edu.in`}
-                  </div>
-                </div>
-              ) : userForm.emp_no && !userForm.verifying && (
-                <div className="text-[11px] text-zinc-500 italic">
-                  Click "Verify ID" to auto-fetch name, division, and department from live HRMS.
                 </div>
               )}
 
-              {/* Role Selection */}
+              {/* Role Selection: Interactive Choice with Visual Cards and Dropdown */}
               <div>
-                <label className="block font-medium text-zinc-700 mb-1">
-                  Assign Library Role *
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block font-semibold text-zinc-700 text-xs">
+                    Assign Library Role *
+                  </label>
+                  <span className="text-[10px] text-zinc-400">
+                    Click a role below or select from dropdown
+                  </span>
+                </div>
+
+                {/* Quick Select Role Cards */}
+                <div className="grid grid-cols-2 gap-2 mb-2.5">
+                  {roles.map(r => {
+                    const isSelected = userForm.role_name === r.name;
+                    return (
+                      <div
+                        key={r.id || r.name}
+                        onClick={() => handleRoleChangeInForm(r.name)}
+                        className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all flex flex-col justify-between ${
+                          isSelected
+                            ? 'bg-zinc-900 text-white border-zinc-900 shadow-xs ring-2 ring-zinc-900/10'
+                            : 'bg-white hover:bg-zinc-50 border-zinc-200 text-zinc-800'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold truncate">{r.name}</span>
+                          {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0 ml-1" />}
+                        </div>
+                        <span className={`text-[10px] mt-1 line-clamp-1 ${isSelected ? 'text-zinc-300' : 'text-zinc-400'}`}>
+                          {r.page_privileges?.length || 0} of 6 privileges
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Dropdown Selector */}
                 <select
                   required
                   value={userForm.role_name}
                   onChange={(e) => handleRoleChangeInForm(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-zinc-900"
+                  className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-zinc-900 font-medium"
                 >
+                  <option value="" disabled>-- Select a Library Role --</option>
                   {roles.map(r => (
                     <option key={r.id || r.name} value={r.name}>
-                      {r.name} {r.is_system ? '(Superadmin)' : ''}
+                      {r.name} {r.is_system ? '(Full System Administration)' : `(${r.page_privileges?.length || 0} privileges)`}
                     </option>
                   ))}
                 </select>
+
+                {/* Selected Role Description Card */}
+                {(() => {
+                  const currRole = roles.find(r => r.name === userForm.role_name);
+                  if (!currRole) return null;
+                  return (
+                    <div className="mt-2 p-2.5 bg-blue-50/50 border border-blue-200/60 rounded-xl text-[11px] text-blue-900 flex items-start gap-2">
+                      <Shield className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-xs">{currRole.name} Role Selected</div>
+                        <p className="text-[11px] text-blue-800 mt-0.5 leading-relaxed">{currRole.description || 'Pre-configured library role with designated page access.'}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Page Privileges Checklist */}

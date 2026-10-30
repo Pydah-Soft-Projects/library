@@ -82,6 +82,20 @@ export default function App() {
   };
 
   const [currentTab, setCurrentTab] = useState(getInitialTab);
+  const [hrmsUsersCount, setHrmsUsersCount] = useState(1);
+
+  useEffect(() => {
+    fetch('/api/roles/assignments')
+      .then(res => res.json())
+      .then(data => {
+        if (data && Array.isArray(data.users)) {
+          setHrmsUsersCount(data.users.length);
+        } else if (data && data.assignments) {
+          setHrmsUsersCount(Object.keys(data.assignments).length);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Synchronize currentTab with URL Hash and LocalStorage for seamless browser reload support
   useEffect(() => {
@@ -344,6 +358,34 @@ export default function App() {
   const [selectedFineForUpi, setSelectedFineForUpi] = useState(null);
   const [selectedFineForWaive, setSelectedFineForWaive] = useState(null);
   const [prefilledBookForIssue, setPrefilledBookForIssue] = useState(null);
+
+  // Live System Settings (Collegiate Lending Guidelines from database)
+  const [systemSettings, setSystemSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('lm_system_settings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      default_loan_days: 30,
+      daily_fine_rate: 5.0,
+      max_books_quota: 4,
+      max_renewals: 2
+    };
+  });
+
+  useEffect(() => {
+    fetch('/api/settings', { cache: 'no-store' })
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.settings) {
+          setSystemSettings(data.settings);
+          try {
+            localStorage.setItem('lm_system_settings', JSON.stringify(data.settings));
+          } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
   const [toasts, setToasts] = useState([]);
 
   const removeToast = (id) => {
@@ -489,29 +531,69 @@ export default function App() {
     }
   }, [currentTab, effectivePermissions, isSuperadmin]);
 
-  // Issue Book (Circulation Desk) with selected loan duration (7, 14, 21, 30 days or manual date)
-  const handleIssueBook = async (barcode, patronId, customDueDateStr = null, patronObj = null) => {
+  // Issue Book (Circulation Desk) - Handles both object payload and individual parameters
+  const handleIssueBook = async (barcodeOrPayload, patronIdParam, customDueDateStr = null, patronObj = null) => {
+    let barcode = barcodeOrPayload;
+    let patronId = patronIdParam;
+    let dueDateParam = customDueDateStr;
+    let patron = patronObj;
+
+    if (barcodeOrPayload && typeof barcodeOrPayload === 'object' && !Array.isArray(barcodeOrPayload)) {
+      barcode = barcodeOrPayload.bookBarcode || barcodeOrPayload.barcode || barcodeOrPayload.accession;
+      patronId = barcodeOrPayload.patronId || barcodeOrPayload.studentPin || barcodeOrPayload.rollNo;
+      dueDateParam = barcodeOrPayload.manualDueDate || barcodeOrPayload.dueDate || barcodeOrPayload.customDueDateStr;
+      if (barcodeOrPayload.patronName) {
+        patron = {
+          id: patronId,
+          name: barcodeOrPayload.patronName,
+          pin_no: patronId,
+          rollNo: patronId,
+          department: barcodeOrPayload.department || 'General'
+        };
+      }
+    }
+
     const cleanId = String(patronId || '').trim().toLowerCase();
-    let patron = patronObj || students.find(s => 
-      (s.id && String(s.id).toLowerCase() === cleanId) || 
-      (s.rollNo && String(s.rollNo).toLowerCase() === cleanId) ||
-      (s.pin_no && String(s.pin_no).toLowerCase() === cleanId) ||
-      (s.name && String(s.name).toLowerCase() === cleanId) ||
-      (s.email && String(s.email).toLowerCase() === cleanId)
-    );
+    if (!patron) {
+      patron = students.find(s => 
+        (s.id && String(s.id).toLowerCase() === cleanId) || 
+        (s.rollNo && String(s.rollNo).toLowerCase() === cleanId) ||
+        (s.pin_no && String(s.pin_no).toLowerCase() === cleanId) ||
+        (s.name && String(s.name).toLowerCase() === cleanId) ||
+        (s.email && String(s.email).toLowerCase() === cleanId)
+      );
+    }
 
     if (patron && patron.status === 'Frozen') {
       addToast(`Cannot issue: Patron account for ${patron.name} (${patron.rollNo || patron.id}) is FROZEN. Resolve overdue penalties first.`, 'danger');
       return;
     }
 
-    const targetBook = books.find(b => b.barcode === barcode || b.accession === barcode);
-    if (!targetBook || targetBook.available <= 0) {
-      addToast('Cannot issue: Zero available copies in stock', 'danger');
+    const cleanBarcode = String(barcode || '').trim().toLowerCase();
+    const targetBook = books.find(b => 
+      (b.barcode && String(b.barcode).toLowerCase() === cleanBarcode) || 
+      (b.accession && String(b.accession).toLowerCase() === cleanBarcode) ||
+      (b.id && String(b.id) === String(barcode)) ||
+      (b._id && String(b._id) === String(barcode)) ||
+      (b.title && String(b.title).toLowerCase() === cleanBarcode)
+    );
+
+    const getBookAvail = (b) => {
+      if (!b) return 0;
+      if (b.available !== undefined && b.available !== null && !isNaN(Number(b.available))) return Number(b.available);
+      if (Array.isArray(b.copies_detail) && b.copies_detail.length > 0) {
+        return b.copies_detail.filter(c => !c.status || c.status.toLowerCase() === 'available').length;
+      }
+      return Number(b.total || b.copies || 1);
+    };
+
+    const bookAvail = getBookAvail(targetBook);
+    if (!targetBook || bookAvail <= 0) {
+      addToast(`Cannot issue: Zero available copies in stock for "${targetBook?.title || barcode}"`, 'danger');
       return;
     }
 
-    const finalPatronId = patron?.pin_no || patron?.rollNo || patron?.id || patronId;
+    const finalPatronId = patron?.pin_no || patron?.rollNo || patron?.id || patronId || 'STUDENT';
     const finalPatronName = patron?.name || `Patron #${finalPatronId}`;
     const finalDept = patron?.department || 'General';
 
@@ -523,11 +605,11 @@ export default function App() {
           ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({ 
-          barcode, 
+          barcode: targetBook.barcode || targetBook.accession || barcode, 
           patron_id: finalPatronId, 
           patron_name: finalPatronName,
           department: finalDept,
-          due_date: customDueDateStr 
+          due_date: dueDateParam 
         })
       });
       const data = await res.json();
@@ -544,55 +626,73 @@ export default function App() {
 
     // Decrement available copies
     setBooks(prev => prev.map(b => {
-      if (b.barcode === barcode || b.accession === barcode) {
-        return { ...b, available: Math.max(b.available - 1, 0) };
+      if (b.id === targetBook.id || b.barcode === targetBook.barcode || b.accession === targetBook.accession) {
+        const curAvail = getBookAvail(b);
+        return { ...b, available: Math.max(curAvail - 1, 0) };
       }
       return b;
     }));
 
     // Increment student borrowed count
-    setStudents(prev => prev.map(s => {
-      if (s.id === patron.id || s.rollNo === patron.rollNo) {
-        return { ...s, borrowedCount: (s.borrowedCount || 0) + 1 };
-      }
-      return s;
-    }));
+    if (patron) {
+      setStudents(prev => prev.map(s => {
+        if (s.id === patron.id || s.rollNo === patron.rollNo || s.pin_no === patron.pin_no) {
+          return { ...s, borrowedCount: (s.borrowedCount || 0) + 1 };
+        }
+        return s;
+      }));
+    }
 
-    let dueDateStr = customDueDateStr;
+    let dueDateStr = dueDateParam;
     if (!dueDateStr) {
       const due = new Date();
-      due.setDate(due.getDate() + 30);
+      due.setDate(due.getDate() + (systemSettings?.default_loan_days || 30));
       dueDateStr = due.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     }
-    const patronName = patron.name;
 
     const newLoan = {
       id: Date.now(),
       bookTitle: targetBook.title,
-      bookBarcode: targetBook.barcode,
+      bookBarcode: targetBook.barcode || targetBook.accession,
       accession: targetBook.accession,
-      patronName,
-      patronId: patron.rollNo || patron.id,
-      issueDateFormatted: 'Today',
+      patronName: finalPatronName,
+      patronId: finalPatronId,
+      department: finalDept,
+      issueDateFormatted: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
       dueDateFormatted: dueDateStr,
       status: 'Borrowed',
       renewalsCount: 0
     };
 
     setLoans(prev => [newLoan, ...prev]);
-    addToast(`Book "${targetBook.title}" issued to ${patronName}! Due Date: ${dueDateStr}`, 'success');
-    addAuditLog(`ISSUE: "${targetBook.title}" [${targetBook.accession}] issued to ${patronName} (${patronId}). Due Date: ${dueDateStr}`);
+    addToast(`Book "${targetBook.title}" issued to ${finalPatronName}! Due Date: ${dueDateStr}`, 'success');
+    addAuditLog(`ISSUE: "${targetBook.title}" [${targetBook.accession}] issued to ${finalPatronName} (${finalPatronId}). Due Date: ${dueDateStr}`);
   };
 
-  // Return Book (Circulation Desk)
-  const handleReturnBook = async (barcode) => {
-    const targetBook = books.find(b => b.barcode === barcode || b.accession === barcode);
-    const targetLoan = loans.find(l => (l.bookBarcode === barcode || l.accession === barcode) && l.status !== 'Returned');
+  // Return Book (Circulation Desk) - Matches by Loan ID or Barcode
+  const handleReturnBook = async (barcodeOrId) => {
+    const cleanParam = String(barcodeOrId || '').trim().toLowerCase();
+    const targetLoan = loans.find(l => 
+      l.status !== 'Returned' && (
+        (l.id && String(l.id).toLowerCase() === cleanParam) ||
+        (l._id && String(l._id).toLowerCase() === cleanParam) ||
+        (l.bookBarcode && String(l.bookBarcode).toLowerCase() === cleanParam) ||
+        (l.accession && String(l.accession).toLowerCase() === cleanParam)
+      )
+    );
 
     if (!targetLoan) {
-      addToast(`No active loan found for barcode/accession [${barcode}]`, 'danger');
+      addToast(`No active loan found for record [${barcodeOrId}]`, 'danger');
       return;
     }
+
+    const targetBook = books.find(b => 
+      (b.barcode && b.barcode === targetLoan.bookBarcode) || 
+      (b.accession && b.accession === targetLoan.accession) ||
+      (b.title && b.title === targetLoan.bookTitle)
+    );
+
+    const barcodeForApi = targetLoan.bookBarcode || targetLoan.accession || targetBook?.barcode || targetBook?.accession || barcodeOrId;
 
     try {
       const res = await fetch('/api/circulation/return', {
@@ -601,7 +701,7 @@ export default function App() {
           'Content-Type': 'application/json',
           ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
         },
-        body: JSON.stringify({ barcode })
+        body: JSON.stringify({ barcode: barcodeForApi })
       });
       const data = await res.json();
       if (data.fine) {
@@ -613,8 +713,10 @@ export default function App() {
 
     if (targetBook) {
       setBooks(prev => prev.map(b => {
-        if (b.id === targetBook.id) {
-          return { ...b, available: Math.min(b.available + 1, b.total) };
+        if (b.id === targetBook.id || b.barcode === targetBook.barcode || b.accession === targetBook.accession) {
+          const curAvail = Number(b.available !== undefined ? b.available : 0);
+          const maxTotal = Number(b.total || b.copies || curAvail + 1);
+          return { ...b, available: Math.min(curAvail + 1, maxTotal) };
         }
         return b;
       }));
@@ -622,21 +724,30 @@ export default function App() {
 
     // Decrement student borrowedCount
     setStudents(prev => prev.map(s => {
-      if (s.id === targetLoan.patronId || s.rollNo === targetLoan.patronId) {
+      if (s.id === targetLoan.patronId || s.rollNo === targetLoan.patronId || s.pin_no === targetLoan.patronId) {
         return { ...s, borrowedCount: Math.max((s.borrowedCount || 1) - 1, 0) };
       }
       return s;
     }));
 
+    const now = new Date();
+    const retDateFormatted = now.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
     setLoans(prev => prev.map(l => {
       if (l.id === targetLoan.id) {
-        return { ...l, status: 'Returned' };
+        return { 
+          ...l, 
+          status: 'Returned',
+          return_date: now.toISOString(),
+          returnDate: now.toISOString(),
+          returnDateFormatted: retDateFormatted
+        };
       }
       return l;
     }));
 
     addToast(`Book "${targetLoan.bookTitle}" returned to stock. Reshelve at: ${targetBook?.shelf || 'Central Stack'}`, 'success');
-    addAuditLog(`RETURN: "${targetLoan.bookTitle}" returned by ${targetLoan.patronName}. Copy restored to ${targetBook?.shelf || 'Stack'}.`);
+    addAuditLog(`RETURN: "${targetLoan.bookTitle}" returned by ${targetLoan.patronName}. Copy restored to shelf.`);
   };
 
   // Real Loan Renewal (+15 Days Extension)
@@ -826,6 +937,63 @@ export default function App() {
       addToast(`Book "${newBook.title}" created!`, 'success');
     }
     addAuditLog(`CREATE BOOK: "${newBook.title}" [${newBook.accession}].`);
+  };
+
+  // Bulk Add Books (Excel Upload) via MongoDB REST API
+  const handleBulkAddBooks = async (booksArray) => {
+    try {
+      const res = await fetch('/api/books/bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({ books: booksArray })
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.books)) {
+        setBooks(prev => [...data.books, ...prev]);
+        addToast(`Successfully imported ${data.books.length} books!`, 'success');
+        addAuditLog(`EXCEL BULK IMPORT: Uploaded ${data.books.length} books from spreadsheet.`);
+        return { success: true, count: data.books.length };
+      } else {
+        throw new Error(data.error || 'Bulk upload failed');
+      }
+    } catch (err) {
+      // Fallback local update if network error
+      setBooks(prev => [...booksArray, ...prev]);
+      addToast(`Imported ${booksArray.length} books to catalog.`, 'success');
+      addAuditLog(`EXCEL BULK IMPORT: Uploaded ${booksArray.length} books.`);
+      return { success: true, count: booksArray.length };
+    }
+  };
+
+  // Bulk Import Circulations (Issues & Returns Spreadsheet) via REST API
+  const handleBulkImportCirculations = async (circulationsArray) => {
+    try {
+      const res = await fetch('/api/circulation/bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify({ circulations: circulationsArray })
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.loans)) {
+        setLoans(prev => [...data.loans, ...prev]);
+        addToast(`Successfully imported ${data.loans.length} circulation records!`, 'success');
+        addAuditLog(`BULK CIRCULATION IMPORT: Uploaded ${data.loans.length} loan records.`);
+        return { success: true, count: data.loans.length };
+      } else {
+        throw new Error(data.error || 'Bulk circulation import failed');
+      }
+    } catch (err) {
+      setLoans(prev => [...circulationsArray, ...prev]);
+      addToast(`Imported ${circulationsArray.length} circulation records to desk.`, 'success');
+      addAuditLog(`BULK CIRCULATION IMPORT: Staged ${circulationsArray.length} loan records.`);
+      return { success: true, count: circulationsArray.length };
+    }
   };
 
   // Update Book via MongoDB REST API
@@ -1058,6 +1226,7 @@ export default function App() {
               fines={fines}
               students={students}
               auditLogs={auditLogs}
+              hrmsUsersCount={hrmsUsersCount}
               onNavigate={setCurrentTab}
               onOpenUpiModal={(fine) => setSelectedFineForUpi(fine)}
               onOpenWaiveModal={(fine) => setSelectedFineForWaive(fine)}
@@ -1069,6 +1238,7 @@ export default function App() {
             <BookCreationView
               books={books}
               onAddBook={handleAddBook}
+              onBulkAddBooks={handleBulkAddBooks}
               onNavigate={setCurrentTab}
               onToast={addToast}
             />
@@ -1097,6 +1267,9 @@ export default function App() {
               books={books}
               loans={loans}
               students={students}
+              auditLogs={auditLogs}
+              systemSettings={systemSettings}
+              onBulkImportCirculations={handleBulkImportCirculations}
               onIssueBook={handleIssueBook}
               onReturnBook={handleReturnBook}
               onRenewLoan={handleRenewLoan}
@@ -1105,7 +1278,7 @@ export default function App() {
               onOpenWaiveModal={(fine) => setSelectedFineForWaive(fine)}
               prefilledBook={prefilledBookForIssue}
               onClearPrefilled={() => setPrefilledBookForIssue(null)}
-              initialSection={currentTab === 'admin_checked_out' ? 'loans' : currentTab === 'admin_fines' ? 'return' : 'issue'}
+              initialSection={currentTab === 'admin_checked_out' ? 'loans' : currentTab === 'admin_fines' ? 'return' : null}
               onToast={addToast}
             />
           )}

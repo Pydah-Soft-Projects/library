@@ -227,71 +227,28 @@ export default function Sidebar({
 
       {/* Bottom User Persona, Role Switcher & Logout */}
       <div className="p-3 border-t border-zinc-100 space-y-2">
-        {/* Role Switcher Button */}
-        <div className="relative">
-          <button
-            onClick={() => {
-              if (isSuperadmin) {
-                setRoleDropdownOpen(!roleDropdownOpen);
-              }
-            }}
-            className={`w-full rounded-xl border border-zinc-200/80 bg-zinc-50/70 transition-all ${
-              isSuperadmin ? 'hover:bg-zinc-100 cursor-pointer' : 'cursor-default'
-            } ${
-              isCollapsed ? 'p-2 flex items-center justify-center' : 'p-2.5 flex items-center justify-between text-left'
-            }`}
-            title={isSuperadmin ? 'Switch Persona (Superadmin only)' : 'Assigned Institutional Account'}
-          >
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="w-7 h-7 rounded-lg bg-zinc-200 text-zinc-800 flex items-center justify-center text-xs font-bold shrink-0">
-                {(currentUser?.full_name || activeRoleObj.title).charAt(0).toUpperCase()}
-              </div>
-              {!isCollapsed && (
-                <div className="overflow-hidden">
-                  <div className="text-xs font-bold text-zinc-900 truncate">
-                    {currentUser?.full_name || activeRoleObj.title}
-                  </div>
-                  <div className="text-[10px] text-zinc-400 truncate">
-                    {currentUser?.role || activeRoleObj.title} • {currentUser?.patron_id || activeRoleObj.tag}
-                  </div>
-                </div>
-              )}
+        {/* User Account Profile */}
+        <div
+          className={`w-full rounded-xl border border-zinc-200/80 bg-zinc-50/70 ${
+            isCollapsed ? 'p-2 flex items-center justify-center' : 'p-2.5 flex items-center justify-between text-left'
+          }`}
+          title="Institutional User Account"
+        >
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-7 h-7 rounded-lg bg-zinc-200 text-zinc-800 flex items-center justify-center text-xs font-bold shrink-0">
+              {(currentUser?.full_name || activeRoleObj.title).charAt(0).toUpperCase()}
             </div>
-
-            {!isCollapsed && isSuperadmin && (
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white text-zinc-600 border border-zinc-200 shrink-0">
-                Switch
-              </span>
-            )}
-          </button>
-
-          {/* Role Dropdown Popup (Superadmin only) */}
-          {roleDropdownOpen && isSuperadmin && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setRoleDropdownOpen(false)} />
-              <div className={`absolute bottom-full mb-2 rounded-2xl bg-white border border-zinc-200 shadow-xl z-50 p-2 text-xs space-y-1 ${
-                isCollapsed ? 'left-0 w-56' : 'left-0 right-0'
-              }`}>
-                <div className="px-2.5 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider border-b border-zinc-100">
-                  Switch Active Role
+            {!isCollapsed && (
+              <div className="overflow-hidden">
+                <div className="text-xs font-bold text-zinc-900 truncate">
+                  {currentUser?.full_name || activeRoleObj.title}
                 </div>
-                {roles.map(r => (
-                  <button
-                    key={r.id}
-                    onClick={() => handleRoleSelect(r)}
-                    className={`w-full flex items-center justify-between p-2 rounded-xl text-left transition-colors ${
-                      currentRole === r.id
-                        ? 'bg-zinc-900 text-white font-medium'
-                        : 'hover:bg-zinc-100 text-zinc-700'
-                    }`}
-                  >
-                    <span>{r.title}</span>
-                    {currentRole === r.id && <Check className="w-3.5 h-3.5 text-white" />}
-                  </button>
-                ))}
+                <div className="text-[10px] text-zinc-400 truncate">
+                  {currentUser?.role || activeRoleObj.title} • {currentUser?.patron_id || activeRoleObj.tag}
+                </div>
               </div>
-            </>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Minimal Logout Button */}

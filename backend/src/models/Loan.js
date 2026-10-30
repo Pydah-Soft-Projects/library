@@ -55,7 +55,7 @@ const loanSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Borrowed', 'Returned', 'Overdue'],
+      enum: ['Borrowed', 'Returned', 'Overdue', 'Active'],
       default: 'Borrowed'
     },
     renewals_count: {

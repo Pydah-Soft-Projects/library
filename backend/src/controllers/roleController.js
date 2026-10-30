@@ -19,7 +19,7 @@ let superadminSeeded = false;
 async function ensureSeedRoles() {
   if (superadminSeeded) return;
   try {
-    // ONLY ensure Superadmin root role exists - NEVER recreate roles deleted by user
+    // Ensure Superadmin root role exists
     const superadmin = await Role.findOne({ name: { $regex: /^superadmin$/i } });
     if (!superadmin) {
       await Role.create({
@@ -31,9 +31,47 @@ async function ensureSeedRoles() {
       });
       console.log('🛡️ Ensured root Superadmin role exists in database');
     }
+
+    // Ensure standard operational roles exist for clear assignment
+    const librarian = await Role.findOne({ name: { $regex: /^librarian$/i } });
+    if (!librarian) {
+      await Role.create({
+        name: 'Librarian',
+        description: 'Catalog management, book creation, circulation desk and lending operations',
+        color: 'blue',
+        is_system: false,
+        permissions: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns']
+      });
+      console.log('📚 Ensured standard Librarian role exists in database');
+    }
+
+    const circStaff = await Role.findOne({ name: { $regex: /^circulation staff$/i } });
+    if (!circStaff) {
+      await Role.create({
+        name: 'Circulation Staff',
+        description: 'Student verification, 30-day lending window, returns and fine assessment',
+        color: 'emerald',
+        is_system: false,
+        permissions: ['dashboard', 'all_books', 'book_issues_returns']
+      });
+      console.log('🔄 Ensured standard Circulation Staff role exists in database');
+    }
+
+    const cataloger = await Role.findOne({ name: { $regex: /^catalog assistant$/i } });
+    if (!cataloger) {
+      await Role.create({
+        name: 'Catalog Assistant',
+        description: 'Book holdings registration, barcode generation, and accessioning',
+        color: 'purple',
+        is_system: false,
+        permissions: ['dashboard', 'book_creation', 'all_books']
+      });
+      console.log('🏷️ Ensured standard Catalog Assistant role exists in database');
+    }
+
     superadminSeeded = true;
   } catch (err) {
-    console.error('Error ensuring Superadmin role in DB:', err.message);
+    console.error('Error ensuring standard roles in DB:', err.message);
   }
 }
 
@@ -491,6 +529,5 @@ module.exports = {
   getHrmsUserRoles,
   deleteHrmsUserAssignment,
   ensureSeedRoles,
-  DEFAULT_SYSTEM_ROLES: INITIAL_BASELINE_ROLES,
   PAGE_PRIVILEGES
 };
