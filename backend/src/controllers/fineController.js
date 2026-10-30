@@ -1,33 +1,42 @@
 const db = require('../config/db');
+const User = require('../models/User');
 const { logAudit } = require('../services/auditService');
 
-function getFines(req, res) {
-  const { status, user_id } = req.query || {};
-  let list = db.fines.map(f => {
-    const u = db.users.find(user => user.id === f.user_id);
-    const loan = db.borrow_records.find(b => b.id === f.borrow_id);
-    const book = loan ? db.books.find(bk => bk.id === loan.book_id) : null;
+async function getFines(req, res) {
+  try {
+    const { status, user_id } = req.query || {};
+    const users = await User.find().select('full_name patron_id').lean();
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
 
-    return {
-      ...f,
-      patron_name: u ? u.full_name : 'Unknown',
-      patron_id: u ? u.patron_id : 'Unknown',
-      book_title: book ? book.title : 'Unknown'
-    };
-  });
+    let list = db.fines.map(f => {
+      const u = userMap.get(String(f.user_id));
+      const loan = db.borrow_records.find(b => b.id === f.borrow_id);
+      const book = loan ? db.books.find(bk => bk.id === loan.book_id) : null;
 
-  if (status) {
-    list = list.filter(f => f.status.toLowerCase() === status.toLowerCase());
+      return {
+        ...f,
+        patron_name: u ? u.full_name : 'Unknown',
+        patron_id: u ? u.patron_id : 'Unknown',
+        book_title: book ? book.title : 'Unknown'
+      };
+    });
+
+    if (status) {
+      list = list.filter(f => f.status.toLowerCase() === status.toLowerCase());
+    }
+
+    if (user_id) {
+      list = list.filter(f => String(f.user_id) === String(user_id));
+    }
+
+    res.json({
+      total: list.length,
+      fines: list
+    });
+  } catch (err) {
+    console.error('Error fetching fines:', err);
+    res.status(500).json({ error: 'Failed to retrieve fines list' });
   }
-
-  if (user_id) {
-    list = list.filter(f => f.user_id === parseInt(user_id, 10));
-  }
-
-  res.json({
-    total: list.length,
-    fines: list
-  });
 }
 
 function collectFine(req, res) {
@@ -45,13 +54,13 @@ function collectFine(req, res) {
 
   fine.status = 'Paid';
   fine.paid_at = new Date().toISOString();
-  fine.collected_by = 3; // Ramesh Kumar (Desk Staff)
+  fine.collected_by = req.user?.userId || 'DESK_STAFF';
   fine.payment_method = payment_method;
 
   const receiptNo = `REC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
   logAudit({
-    actor_id: 3,
+    actor_id: req.user?.userId || 'SYSTEM',
     action_key: 'fines.collect',
     target_resource: `FINE:${fine.id}`,
     payload: {
@@ -86,7 +95,7 @@ function waiveFine(req, res) {
   fine.paid_at = new Date().toISOString();
 
   logAudit({
-    actor_id: 2, // Librarian
+    actor_id: req.user?.userId || 'SYSTEM',
     action_key: 'fines.waive',
     target_resource: `FINE:${fine.id}`,
     payload: {

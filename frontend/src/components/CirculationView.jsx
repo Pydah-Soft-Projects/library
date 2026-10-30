@@ -41,9 +41,8 @@ export default function CirculationView({
   // Book search term inside checkout
   const [bookSearchTerm, setBookSearchTerm] = useState('');
 
-  // Default to an active patron in good standing (e.g. Priya or Ananya)
-  const defaultPatron = students.find(s => s.status === 'Active') || students[0];
-  const [studentId, setStudentId] = useState(defaultPatron ? (defaultPatron.rollNo || defaultPatron.id) : '');
+  // Selected patron ID for checkout
+  const [studentId, setStudentId] = useState('');
 
   // Loan Duration Preset / Manual Selection (7, 14, 21, 30 days, or manual)
   const [durationPreset, setDurationPreset] = useState(30);
@@ -417,7 +416,7 @@ export default function CirculationView({
                     required
                     value={studentId}
                     onChange={(e) => setStudentId(e.target.value)}
-                    placeholder="Search by Roll No or Name (e.g. STU-2023-CS042)..."
+                    placeholder="Search by Roll No, Username, or Name..."
                     className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 text-xs font-mono focus:ring-2 focus:ring-blue-500"
                   />
                   {students.slice(0, 3).map(s => (

@@ -1,85 +1,262 @@
-const db = require('../config/db');
+const Book = require('../models/Book');
+const Category = require('../models/Category');
 const { logAudit } = require('../services/auditService');
 
-function getBooks(req, res) {
-  const { q, category, available_only } = req.query || {};
-  let results = [...db.books];
 
-  if (category && category !== 'All') {
-    results = results.filter(b => b.category.toLowerCase() === category.toLowerCase());
+
+async function getBooks(req, res) {
+  try {
+    const { q, category, available_only } = req.query || {};
+    const query = {};
+
+    if (category && category !== 'All') {
+      query.category = { $regex: new RegExp(`^${category}$`, 'i') };
+    }
+
+    if (q) {
+      const term = q.trim();
+      query.$or = [
+        { title: { $regex: term, $options: 'i' } },
+        { author: { $regex: term, $options: 'i' } },
+        { accession: { $regex: term, $options: 'i' } },
+        { barcode: { $regex: term, $options: 'i' } },
+        { shelf: { $regex: term, $options: 'i' } },
+        { isbn: { $regex: term, $options: 'i' } }
+      ];
+    }
+
+    if (available_only === 'true') {
+      query.available = { $gt: 0 };
+    }
+
+    const books = await Book.find(query).sort({ created_at: -1 }).lean();
+
+    const formattedBooks = books.map(b => ({
+      id: b._id.toString(),
+      _id: b._id.toString(),
+      title: b.title,
+      author: b.author,
+      isbn: b.isbn,
+      category: b.category,
+      category_code: b.category_code,
+      accession: b.accession,
+      barcode: b.barcode,
+      shelf: b.shelf,
+      total: b.total,
+      available: b.available,
+      publisher: b.publisher,
+      edition: b.edition,
+      copies_detail: b.copies_detail || []
+    }));
+
+    res.json({
+      total: formattedBooks.length,
+      books: formattedBooks
+    });
+  } catch (err) {
+    console.error('Error in getBooks:', err);
+    res.status(500).json({ error: 'Failed to retrieve books from database' });
   }
-
-  if (q) {
-    const term = q.toLowerCase();
-    results = results.filter(b => 
-      b.title.toLowerCase().includes(term) ||
-      b.author.toLowerCase().includes(term) ||
-      b.isbn.toLowerCase().includes(term) ||
-      b.accession_no.toLowerCase().includes(term) ||
-      b.barcode.toLowerCase().includes(term) ||
-      b.shelf_location.toLowerCase().includes(term)
-    );
-  }
-
-  if (available_only === 'true') {
-    results = results.filter(b => b.available_copies > 0);
-  }
-
-  res.json({
-    total: results.length,
-    books: results
-  });
 }
 
-function getBookById(req, res) {
-  const id = parseInt(req.params.id, 10);
-  const book = db.books.find(b => b.id === id);
-  if (!book) {
-    return res.status(404).json({ error: 'Book accession record not found' });
+async function getBookById(req, res) {
+  try {
+    const { id } = req.params;
+    let book = null;
+    try {
+      book = await Book.findById(id).lean();
+    } catch (_) {}
+
+    if (!book) {
+      book = await Book.findOne({
+        $or: [{ accession: id }, { barcode: id }]
+      }).lean();
+    }
+
+    if (!book) {
+      return res.status(404).json({ error: 'Book record not found' });
+    }
+
+    res.json({
+      book: {
+        id: book._id.toString(),
+        ...book
+      }
+    });
+  } catch (err) {
+    console.error('Error in getBookById:', err);
+    res.status(500).json({ error: 'Failed to find book' });
   }
-  res.json({ book });
 }
 
-function createBook(req, res) {
-  const { isbn, title, author, category, publisher, publication_year, shelf_location, total_copies } = req.body || {};
+async function createBook(req, res) {
+  try {
+    const { 
+      title, 
+      author, 
+      isbn, 
+      category, 
+      category_code, 
+      accession, 
+      barcode, 
+      shelf, 
+      total, 
+      available, 
+      publisher, 
+      edition,
+      copies_detail 
+    } = req.body || {};
 
-  if (!isbn || !title || !author) {
-    return res.status(400).json({ error: 'ISBN, Title, and Author are mandatory' });
+    if (!title || !author) {
+      return res.status(400).json({ error: 'Book title and author are required' });
+    }
+
+    const copies = Math.max(1, parseInt(total, 10) || 1);
+    const catCode = (category_code || (category || 'GEN').slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'GEN';
+    const randBase = Math.floor(1000 + Math.random() * 9000);
+    const finalAccession = accession || `ACC-${catCode}-${randBase}`;
+    const finalBarcode = barcode || `BC-${catCode}-${randBase}`;
+
+    // Auto-generate sequential copy IDs and serial numbers if not passed explicitly
+    let finalCopiesDetail = [];
+    if (Array.isArray(copies_detail) && copies_detail.length > 0) {
+      finalCopiesDetail = copies_detail;
+    } else {
+      for (let i = 1; i <= copies; i++) {
+        finalCopiesDetail.push({
+          copy_number: i,
+          serial_no: `SN-${catCode}-${randBase}-${String(i).padStart(2, '0')}`,
+          accession: `${finalAccession}-C${i}`,
+          barcode: `${finalBarcode}-${i}`,
+          status: 'Available'
+        });
+      }
+    }
+
+    const newBook = await Book.create({
+      title: title.trim(),
+      author: author.trim(),
+      isbn: isbn ? isbn.trim() : '',
+      category: category || 'General',
+      category_code: catCode,
+      accession: finalAccession,
+      barcode: finalBarcode,
+      shelf: shelf ? shelf.trim() : 'Central Stack',
+      total: copies,
+      available: available !== undefined ? parseInt(available, 10) : copies,
+      publisher: publisher ? publisher.trim() : 'Institutional Press',
+      edition: edition ? edition.trim() : 'Standard Edition',
+      copies_detail: finalCopiesDetail
+    });
+
+    logAudit({
+      actor_id: req.user?.userId || 'STAFF',
+      action_key: 'catalog.create',
+      target_resource: `BOOK:${newBook._id.toString()}`,
+      payload: { 
+        title: newBook.title, 
+        accession: newBook.accession, 
+        copies: copies, 
+        serial_numbers: finalCopiesDetail.map(c => c.serial_no) 
+      }
+    });
+
+    res.status(201).json({
+      message: `Book created with ${copies} sequential copies and serial numbers`,
+      book: {
+        id: newBook._id.toString(),
+        ...newBook.toObject()
+      }
+    });
+  } catch (err) {
+    console.error('Error creating book in MongoDB:', err);
+    res.status(500).json({ error: 'Failed to create book: ' + err.message });
   }
+}
 
-  const copies = parseInt(total_copies, 10) || 1;
-  const newBook = {
-    id: db.books.length + 1,
-    isbn,
-    accession_no: `ACC-${category ? category.slice(0, 3).toUpperCase() : 'GEN'}-${Math.floor(1000 + Math.random() * 9000)}`,
-    barcode: `BC-${Math.floor(1000 + Math.random() * 9000)}`,
-    title,
-    author,
-    category: category || 'General',
-    publisher: publisher || 'Institutional Acquisition',
-    publication_year: publication_year || new Date().getFullYear(),
-    shelf_location: shelf_location || 'Central Stack',
-    total_copies: copies,
-    available_copies: copies
-  };
+async function updateBook(req, res) {
+  try {
+    const { id } = req.params;
+    const updated = await Book.findByIdAndUpdate(id, req.body, { new: true });
+    if (!updated) {
+      return res.status(404).json({ error: 'Book not found' });
+    }
+    res.json({ message: 'Book updated successfully', book: updated });
+  } catch (err) {
+    console.error('Error updating book:', err);
+    res.status(500).json({ error: 'Failed to update book' });
+  }
+}
 
-  db.books.push(newBook);
+async function deleteBook(req, res) {
+  try {
+    const { id } = req.params;
+    const deleted = await Book.findByIdAndDelete(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Book not found' });
+    }
+    res.json({ message: 'Book deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting book:', err);
+    res.status(500).json({ error: 'Failed to delete book' });
+  }
+}
 
-  logAudit({
-    actor_id: 2, // Librarian
-    action_key: 'catalog.create',
-    target_resource: `BOOK:${newBook.id}`,
-    payload: { title: newBook.title, accession: newBook.accession_no }
-  });
+async function getCategories(req, res) {
+  try {
+    const categories = await Category.find().sort({ name: 1 }).lean();
+    res.json({ total: categories.length, categories });
+  } catch (err) {
+    console.error('Error fetching categories:', err);
+    res.status(500).json({ error: 'Failed to fetch categories' });
+  }
+}
 
-  res.status(201).json({
-    message: 'Book accessioned successfully',
-    book: newBook
-  });
+async function createCategory(req, res) {
+  try {
+    const { name, code, description } = req.body || {};
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+    const cleanName = name.trim();
+    const cleanCode = (code || cleanName.slice(0, 3)).trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || 'GEN';
+
+    const existing = await Category.findOne({ name: cleanName });
+    if (existing) {
+      return res.status(409).json({ error: `Category "${cleanName}" already exists` });
+    }
+
+    const cat = await Category.create({
+      name: cleanName,
+      code: cleanCode,
+      description: description ? description.trim() : ''
+    });
+
+    res.status(201).json({ message: 'Category created successfully', category: cat });
+  } catch (err) {
+    console.error('Error creating category:', err);
+    res.status(500).json({ error: 'Failed to create category: ' + err.message });
+  }
+}
+
+async function deleteCategory(req, res) {
+  try {
+    const { id } = req.params;
+    await Category.findByIdAndDelete(id);
+    res.json({ message: 'Category deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting category:', err);
+    res.status(500).json({ error: 'Failed to delete category' });
+  }
 }
 
 module.exports = {
   getBooks,
   getBookById,
-  createBook
+  createBook,
+  updateBook,
+  deleteBook,
+  getCategories,
+  createCategory,
+  deleteCategory
 };

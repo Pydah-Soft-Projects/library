@@ -1,11 +1,13 @@
 /**
  * LibraryManagement — Enterprise Backend REST API Server
- * Built with Node.js + Express.js
- * Implements full REST API specifications & 30-day loan cron from README.md
+ * Built with Node.js + Express.js + MongoDB Atlas
+ * Implements full REST API specifications & 30-day loan cron
  */
 
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const mongoose = require('mongoose');
 
 const authController = require('./src/controllers/authController');
 const bookController = require('./src/controllers/bookController');
@@ -14,9 +16,25 @@ const fineController = require('./src/controllers/fineController');
 const rbacController = require('./src/controllers/rbacController');
 const { getAuditLogs, logAudit } = require('./src/services/auditService');
 const db = require('./src/config/db');
+const User = require('./src/models/User');
+const HrmsUserRole = require('./src/models/HrmsUserRole');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Connect to MongoDB
+const mongoUri = process.env.MongoDB_URI || process.env.MONGODB_URI;
+if (mongoUri) {
+  mongoose.connect(mongoUri)
+    .then(() => {
+      console.log('🍃 Successfully connected to MongoDB Atlas database');
+    })
+    .catch(err => {
+      console.error('❌ MongoDB Connection Error:', err.message);
+    });
+} else {
+  console.warn('⚠️ MongoDB URI not found in environment variables (MongoDB_URI)');
+}
 
 // Middlewares
 app.use(cors());
@@ -30,7 +48,8 @@ app.get('/api/health', (req, res) => {
     service: 'LibraryManagement API',
     version: '2.4.0-enterprise',
     cron_jobs: 'RUNNING',
-    database: 'MySQL 8.0 (InnoDB ACID)',
+    database: 'MongoDB Atlas',
+    mongo_status: mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
     timestamp: new Date().toISOString()
   });
 });
@@ -49,6 +68,11 @@ app.get('/api/auth/verify', authenticateToken, authController.verify);
 app.get('/api/books', bookController.getBooks);
 app.get('/api/books/:id', bookController.getBookById);
 app.post('/api/books', bookController.createBook);
+app.put('/api/books/:id', bookController.updateBook);
+app.delete('/api/books/:id', bookController.deleteBook);
+app.get('/api/categories', bookController.getCategories);
+app.post('/api/categories', bookController.createCategory);
+app.delete('/api/categories/:id', bookController.deleteCategory);
 
 // 4. Circulation Engine Routes (30-Day Policy)
 app.post('/api/circulation/issue', circulationController.issueBook);
@@ -60,9 +84,28 @@ app.get('/api/fines', fineController.getFines);
 app.post('/api/fines/:id/collect', fineController.collectFine);
 app.post('/api/fines/:id/waive', fineController.waiveFine);
 
+const hrmsController = require('./src/controllers/hrmsController');
+const roleController = require('./src/controllers/roleController');
+
 // 6. Dynamic RBAC Matrix & Overrides
 app.get('/api/rbac/matrix', rbacController.getMatrix);
 app.post('/api/rbac/overrides', rbacController.setOverride);
+
+// 6b. Dynamic Role Creation & Management
+app.get('/api/roles', roleController.getRoles);
+app.post('/api/roles', roleController.createRole);
+app.put('/api/roles/:id', roleController.updateRole);
+app.delete('/api/roles/:id', roleController.deleteRole);
+app.post('/api/roles/assign', roleController.assignRoleToHrmsUser);
+app.post('/api/roles/assignments', roleController.assignRoleToHrmsUser);
+app.get('/api/roles/assignments', roleController.getHrmsUserRoles);
+app.delete('/api/roles/assignments/:empNo', roleController.deleteHrmsUserAssignment);
+app.post('/api/roles/user-privilege', roleController.setUserPagePrivilegeOverride);
+
+// 6c. HRMS Direct Database Integration (Live Fetch Without Local Storage)
+app.get('/api/hrms/employees', hrmsController.getEmployees);
+app.get('/api/hrms/departments', hrmsController.getDepartments);
+app.get('/api/hrms/employees/:empNo', hrmsController.getEmployeeByEmpNo);
 
 // 7. Security Audit Trails
 app.get('/api/audit-logs', (req, res) => {
@@ -128,36 +171,91 @@ setInterval(() => {
   }
 }, 60000);
 
-// 7b. Users & Patrons Directory
-app.get('/api/users', (req, res) => {
-  const usersList = db.users.map(u => {
-    const roleObj = db.roles.find(r => r.id === u.role_id) || { name: 'Student' };
-    const userLoans = db.borrow_records.filter(r => r.user_id === u.id && r.status !== 'Returned');
-    const userFines = db.fines.filter(f => f.user_id === u.id && f.status === 'Unpaid');
-    const isFrozen = userLoans.some(l => l.status === 'Overdue') || userFines.length > 0;
-    const totalFines = userFines.reduce((sum, f) => sum + f.amount, 0);
+// 7b. Users & Patrons Directory (Live from MongoDB Atlas)
+app.get('/api/users', async (req, res) => {
+  try {
+    const mongoUsers = await User.find().select('-password').lean();
 
-    return {
-      id: u.id,
-      patron_id: u.patron_id || `PATRON-${u.id}`,
-      rollNo: u.patron_id || `PATRON-${u.id}`,
-      name: u.full_name,
-      full_name: u.full_name,
-      email: u.email,
-      phone: u.phone,
-      department: u.department || 'Engineering',
-      role_id: u.role_id,
-      role: roleObj.name,
-      status: isFrozen ? 'Frozen' : (u.status || 'Active'),
-      borrowedCount: userLoans.length,
-      fineBalance: totalFines
-    };
-  });
+    const usersList = mongoUsers.map(u => {
+      const roleObj = db.roles.find(r => r.id === u.role_id) || { name: u.role || 'Student' };
+      const uid = u._id.toString();
+      const userLoans = db.borrow_records.filter(r => String(r.user_id) === uid && r.status !== 'Returned');
+      const userFines = db.fines.filter(f => String(f.user_id) === uid && f.status === 'Unpaid');
+      const isFrozen = userLoans.some(l => l.status === 'Overdue') || userFines.length > 0 || u.status === 'Frozen';
+      const totalFines = userFines.reduce((sum, f) => sum + f.amount, 0);
 
-  res.json({
-    total: usersList.length,
-    users: usersList
-  });
+      return {
+        id: uid,
+        patron_id: u.patron_id || `PATRON-${uid.slice(-4)}`,
+        rollNo: u.patron_id || `PATRON-${uid.slice(-4)}`,
+        name: u.full_name,
+        full_name: u.full_name,
+        email: u.email,
+        username: u.username,
+        phone: u.phone || '',
+        department: u.department || 'General',
+        role_id: u.role_id,
+        role: u.role || roleObj.name,
+        status: isFrozen ? 'Frozen' : (u.status || 'Active'),
+        borrowedCount: userLoans.length,
+        fineBalance: totalFines,
+        created_at: u.created_at
+      };
+    });
+
+    res.json({
+      total: usersList.length,
+      users: usersList
+    });
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    res.status(500).json({ error: 'Failed to retrieve patron directory' });
+  }
+});
+
+// 7c. Delete User/Patron Account (Superadmin protected)
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const cleanId = String(id).trim();
+
+    let user = null;
+    if (mongoose.Types.ObjectId.isValid(cleanId)) {
+      user = await User.findById(cleanId);
+    } else {
+      user = await User.findOne({ 
+        $or: [
+          { username: cleanId }, 
+          { patron_id: cleanId }, 
+          { email: cleanId }
+        ] 
+      });
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User account not found' });
+    }
+
+    if (
+      user.username?.toLowerCase() === 'superadmin' || 
+      user.role?.toLowerCase() === 'superadmin' ||
+      user.role_id === 1
+    ) {
+      return res.status(403).json({ error: 'Superadmin user account is protected and cannot be deleted.' });
+    }
+
+    await User.findByIdAndDelete(user._id);
+
+    // Also remove any HRMS role mapping for this patron/employee if exists
+    if (user.patron_id) {
+      await HrmsUserRole.findOneAndDelete({ emp_no: user.patron_id });
+    }
+
+    res.json({ message: `User "${user.full_name || user.username}" deleted successfully.` });
+  } catch (err) {
+    console.error('Error deleting user account:', err);
+    res.status(500).json({ error: 'Failed to delete user account: ' + err.message });
+  }
 });
 
 app.listen(PORT, () => {
@@ -165,7 +263,7 @@ app.listen(PORT, () => {
   console.log(`🚀 LibraryManagement Express REST API running on port ${PORT}`);
   console.log(`   Base URL: http://localhost:${PORT}/api`);
   console.log(`   Health:   http://localhost:${PORT}/api/health`);
-  console.log(`   Framework: Node.js + Express.js`);
+  console.log(`   Database: MongoDB Atlas`);
   console.log(`   Cron:     30-Day Overdue & Daily Penalty Scheduler active`);
   console.log(`=======================================================`);
 });

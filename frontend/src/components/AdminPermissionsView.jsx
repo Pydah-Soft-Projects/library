@@ -52,7 +52,7 @@ export default function AdminPermissionsView({ onToast }) {
             </div>
             <div>
               <h3 className="font-heading font-bold text-base text-slate-900 dark:text-white">
-                Front-Desk Sub-staff (Ramesh Kumar)
+                Front-Desk Sub-staff Operations
               </h3>
               <span className="text-xs text-slate-500">Default: Issue, Return & Cash Receipt Collection</span>
             </div>
@@ -107,7 +107,7 @@ export default function AdminPermissionsView({ onToast }) {
             </div>
             <div>
               <h3 className="font-heading font-bold text-base text-slate-900 dark:text-white">
-                Chief Librarian (Dr. Radhakrishnan)
+                Chief Librarian Operations
               </h3>
               <span className="text-xs text-slate-500">Full Catalog & Acquisitions Governance</span>
             </div>

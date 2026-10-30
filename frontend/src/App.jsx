@@ -4,210 +4,41 @@ import TopBar from './components/TopBar';
 import LoginView from './components/LoginView';
 import JwtModal from './components/JwtModal';
 
-// Student Views
-import StudentDashboardView from './components/StudentDashboardView';
-import StudentExploreBooksView from './components/StudentExploreBooksView';
-import StudentMyBooksView from './components/StudentMyBooksView';
-import StudentMyFinesView from './components/StudentMyFinesView';
-import StudentProfileView from './components/StudentProfileView';
-
-// Admin / Librarian / Staff Views
-import AdminDashboardView from './components/AdminDashboardView';
-import BooksInLibraryView from './components/BooksInLibraryView';
-import CirculationView from './components/CirculationView';
-import AdminBookManagementView from './components/AdminBookManagementView';
-import AdminStudentManagementView from './components/AdminStudentManagementView';
-import AdminOverdueFinesView from './components/AdminOverdueFinesView';
-import AdminPermissionsView from './components/AdminPermissionsView';
-import AdminAuditLogsView from './components/AdminAuditLogsView';
+// 6 Core Minimalist Page Views
+import DashboardView from './components/DashboardView';
+import BookCreationView from './components/BookCreationView';
+import AllBooksView from './components/AllBooksView';
+import BookIssuesReturnsView from './components/BookIssuesReturnsView';
+import UserManagementView from './components/UserManagementView';
+import SettingsView from './components/SettingsView';
 
 // Modals & Footer
 import { UpiModal, WaiveModal } from './components/UpiModal';
 import Footer from './components/Footer';
 
-const INITIAL_BOOKS = [
-  {
-    id: 1,
-    title: 'Higher Engineering Mathematics',
-    author: 'Dr. B.S. Grewal',
-    isbn: '978-8174091955',
-    category: 'Engineering',
-    accession: 'ACC-ENG-0412',
-    barcode: 'BC-ENG-8841',
-    shelf: 'Rack E-14 (Row 2)',
-    total: 8,
-    available: 5,
-    publisher: 'Khanna Publishers',
-    edition: '44th Edition'
-  },
-  {
-    id: 2,
-    title: 'Operating System Concepts',
-    author: 'Silberschatz, Galvin & Gagne',
-    isbn: '978-1119800361',
-    category: 'Computer Science',
-    accession: 'ACC-CSE-1189',
-    barcode: 'BC-CSE-3920',
-    shelf: 'Rack CS-03 (Row 1)',
-    total: 10,
-    available: 3,
-    publisher: 'Wiley Global Education',
-    edition: '10th Edition'
-  },
-  {
-    id: 3,
-    title: 'Database System Concepts',
-    author: 'Korth, Sudarshan & Silberschatz',
-    isbn: '978-0078022159',
-    category: 'Computer Science',
-    accession: 'ACC-CSE-2401',
-    barcode: 'BC-CSE-5521',
-    shelf: 'Rack CS-05 (Row 3)',
-    total: 10,
-    available: 2,
-    publisher: 'McGraw-Hill Education',
-    edition: '7th Edition'
-  },
-  {
-    id: 4,
-    title: 'Digital Signal Processing: Principles & Applications',
-    author: 'John G. Proakis, Dimitris Manolakis',
-    isbn: '978-0131873742',
-    category: 'Electronics',
-    accession: 'ACC-ECE-0891',
-    barcode: 'BC-ECE-7201',
-    shelf: 'Rack EC-08 (Row 4)',
-    total: 6,
-    available: 2,
-    publisher: 'Pearson Education',
-    edition: '4th Edition'
-  },
-  {
-    id: 5,
-    title: 'Robbins & Cotran Pathologic Basis of Disease',
-    author: 'Vinay Kumar, Abul Abbas, Jon Aster',
-    isbn: '978-0323531139',
-    category: 'Medical',
-    accession: 'ACC-MED-0314',
-    barcode: 'BC-MED-4412',
-    shelf: 'Rack MD-02 (Row 1)',
-    total: 5,
-    available: 1,
-    publisher: 'Elsevier',
-    edition: '10th Edition'
-  }
-];
-
-const INITIAL_LOANS = [
-  {
-    id: 1,
-    bookTitle: 'Higher Engineering Mathematics',
-    bookBarcode: 'BC-ENG-8841',
-    accession: 'ACC-ENG-0412',
-    patronName: 'Priya Sharma',
-    patronId: 'STU-2023-CS042',
-    issueDateFormatted: '15 Oct 2026',
-    dueDateFormatted: '14 Nov 2026',
-    status: 'Borrowed',
-    renewalsCount: 0
-  },
-  {
-    id: 2,
-    bookTitle: 'Operating System Concepts',
-    bookBarcode: 'BC-CSE-3920',
-    accession: 'ACC-CSE-1189',
-    patronName: 'Rahul Verma',
-    patronId: 'STU-2024-ME019',
-    issueDateFormatted: '12 Sep 2026',
-    dueDateFormatted: '12 Oct 2026',
-    status: 'Overdue',
-    renewalsCount: 0
-  }
-];
-
-const INITIAL_FINES = [
-  {
-    id: 1,
-    user_id: 5,
-    patronName: 'Rahul Verma',
-    patronId: 'STU-2024-ME019',
-    bookTitle: 'Operating System Concepts',
-    amount: 25.00,
-    status: 'Unpaid',
-    daysOverdue: 5
-  }
-];
-
-const INITIAL_STUDENTS = [
-  {
-    id: 'STU-2023-CS042',
-    rollNo: 'STU-2023-CS042',
-    name: 'Priya Sharma',
-    department: 'Computer Science & Engineering',
-    year: '3rd Year B.Tech',
-    email: 'priya.cs23@college.edu.in',
-    phone: '+91 98450 44055',
-    status: 'Active',
-    borrowedCount: 1,
-    fineBalance: 0
-  },
-  {
-    id: 'STU-2024-ME019',
-    rollNo: 'STU-2024-ME019',
-    name: 'Rahul Verma',
-    department: 'Mechanical Engineering',
-    year: '2nd Year B.Tech',
-    email: 'rahul.me24@college.edu.in',
-    phone: '+91 98450 55066',
-    status: 'Frozen',
-    borrowedCount: 1,
-    fineBalance: 25.00
-  },
-  {
-    id: 'STU-2023-EC081',
-    rollNo: 'STU-2023-EC081',
-    name: 'Ananya Deshmukh',
-    department: 'Electronics & Communication',
-    year: '3rd Year B.Tech',
-    email: 'ananya.ec23@college.edu.in',
-    phone: '+91 98450 66077',
-    status: 'Active',
-    borrowedCount: 0,
-    fineBalance: 0
-  },
-  {
-    id: 'STU-2022-CE014',
-    rollNo: 'STU-2022-CE014',
-    name: 'Karthik Raja',
-    department: 'Civil Engineering',
-    year: '4th Year B.Tech',
-    email: 'karthik.ce22@college.edu.in',
-    phone: '+91 98450 77088',
-    status: 'Active',
-    borrowedCount: 0,
-    fineBalance: 0
-  }
-];
-
-const INITIAL_RESERVATIONS = [
-  {
-    id: 1,
-    bookId: 3,
-    bookTitle: 'Database System Concepts',
-    bookAccession: 'ACC-CSE-2401',
-    studentId: 'STU-2023-CS042',
-    studentName: 'Priya Sharma',
-    reservedAtFormatted: 'Today, 10:30 AM',
-    shelfLocation: 'Rack CS-05 (Row 3)',
-    expiresIn: '46 hours'
-  }
-];
+const INITIAL_LOANS = [];
+const INITIAL_FINES = [];
+const INITIAL_STUDENTS = [];
+const INITIAL_RESERVATIONS = [];
 
 export default function App() {
-  // Enforce Clean Standard Theme across entire application
+  // Enforce Clean Standard Theme and purge any legacy mock data from LocalStorage
   useEffect(() => {
     document.documentElement.classList.remove('dark');
     localStorage.removeItem('lm_theme');
+
+    try {
+      ['lm_students', 'lm_loans', 'lm_fines', 'lm_reservations'].forEach(key => {
+        const raw = localStorage.getItem(key);
+        if (raw && (raw.includes('Priya') || raw.includes('Rahul') || raw.includes('STU-2023-CS042') || raw.includes('STU-2024-ME019') || raw.includes('Ananya') || raw.includes('Karthik'))) {
+          localStorage.removeItem(key);
+        }
+      });
+      const rawBooks = localStorage.getItem('lm_books');
+      if (rawBooks && (rawBooks.includes('Grewal') || rawBooks.includes('Silberschatz') || rawBooks.includes('Korth') || rawBooks.includes('Robbins') || rawBooks.includes('Proakis') || rawBooks.includes('Higher Engineering'))) {
+        localStorage.removeItem('lm_books');
+      }
+    } catch {}
   }, []);
 
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('lm_jwt_token') || null);
@@ -240,14 +71,9 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_jwt_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const r = (u.role || '').toLowerCase();
-        if (r.includes('student')) return 'student_dashboard';
-        return 'admin_dashboard';
-      }
+      if (saved) return 'dashboard';
     } catch {}
-    return 'student_dashboard';
+    return 'dashboard';
   });
 
   const [currentStudentId, setCurrentStudentId] = useState(() => {
@@ -258,78 +84,137 @@ export default function App() {
         if (u.patron_id) return u.patron_id;
       }
     } catch {}
-    return 'STU-2023-CS042';
+    return '';
   });
 
-  // Master Application State with LocalStorage Persistence
+  const DEMO_BOOK_KEYWORDS = [
+    'higher engineering mathematics',
+    'operating system concepts',
+    'database system concepts',
+    'digital signal processing',
+    'robbins & cotran',
+    'grewal',
+    'silberschatz',
+    'saketh',
+    'text book',
+    'modern compiler design',
+    'compiler design',
+    'dick grune',
+    'grune',
+    'proakis',
+    'manolakis',
+    'vinay kumar'
+  ];
+
+  // Books state loaded live from MongoDB Atlas backend
   const [books, setBooks] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_books');
-      return saved ? JSON.parse(saved) : INITIAL_BOOKS;
-    } catch {
-      return INITIAL_BOOKS;
-    }
+      if (saved) {
+        const list = JSON.parse(saved);
+        if (Array.isArray(list)) {
+          const cleaned = list
+            .filter(b => {
+              const titleLow = (b.title || '').toLowerCase();
+              const authorLow = (b.author || '').toLowerCase();
+              return !DEMO_BOOK_KEYWORDS.some(kw => titleLow.includes(kw) || authorLow.includes(kw));
+            })
+            .map(b => ({
+              ...b,
+              accession: String(b.accession || '').replace(/[\s\-_]/g, ''),
+              barcode: String(b.barcode || '').replace(/[\s\-_]/g, ''),
+              copies_detail: Array.isArray(b.copies_detail)
+                ? b.copies_detail.map(cp => ({
+                    ...cp,
+                    serial_no: String(cp.serial_no || '').replace(/[\s\-_]/g, ''),
+                    accession: String(cp.accession || '').replace(/[\s\-_]/g, ''),
+                    barcode: String(cp.barcode || '').replace(/[\s\-_]/g, '')
+                  }))
+                : b.copies_detail
+            }));
+          localStorage.setItem('lm_books', JSON.stringify(cleaned));
+          return cleaned;
+        }
+      }
+    } catch {}
+    return [];
   });
 
   const [loans, setLoans] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_loans');
-      return saved ? JSON.parse(saved) : INITIAL_LOANS;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_LOANS;
+      return [];
     }
   });
 
   const [fines, setFines] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_fines');
-      return saved ? JSON.parse(saved) : INITIAL_FINES;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_FINES;
+      return [];
     }
   });
 
   const [students, setStudents] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_students');
-      let list = saved ? JSON.parse(saved) : [...INITIAL_STUDENTS];
-      const savedUser = localStorage.getItem('lm_jwt_user');
-      if (savedUser) {
-        const u = JSON.parse(savedUser);
-        const pid = u.patron_id || `STU-${u.id}`;
-        if (!list.some(s => s.id === pid || s.rollNo === pid || s.email === u.email)) {
-          list.push({
-            id: pid,
-            name: u.full_name || u.name,
-            rollNo: pid,
-            email: u.email,
-            department: u.department || 'Computer Science & Engineering',
-            year: '1st Year',
-            status: u.status || 'Active',
-            borrowedCount: 0,
-            fineBalance: 0
-          });
-        }
-      }
-      return list;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_STUDENTS;
+      return [];
     }
   });
 
   const [reservations, setReservations] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_reservations');
-      return saved ? JSON.parse(saved) : INITIAL_RESERVATIONS;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_RESERVATIONS;
+      return [];
     }
   });
 
-  // Automatically persist changes to LocalStorage
+  // Sync books live from backend on launch, stripping out legacy demo seed titles
   useEffect(() => {
-    try { localStorage.setItem('lm_books', JSON.stringify(books)); } catch {}
-  }, [books]);
+    fetch('/api/books')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.books && Array.isArray(data.books)) {
+          const nonDemoBooks = data.books.filter(b => {
+            const titleLow = (b.title || '').toLowerCase();
+            const authorLow = (b.author || '').toLowerCase();
+            return !DEMO_BOOK_KEYWORDS.some(kw => titleLow.includes(kw) || authorLow.includes(kw));
+          }).map(b => ({
+            id: b.id || b._id,
+            title: b.title,
+            author: b.author,
+            isbn: b.isbn,
+            category: b.category,
+            category_code: (b.category_code || '').replace(/[\s\-_]/g, ''),
+            accession: String(b.accession || b.accession_no || `AC${b.id}`).replace(/[\s\-_]/g, ''),
+            barcode: String(b.barcode || `BC${b.id}`).replace(/[\s\-_]/g, ''),
+            shelf: b.shelf || b.shelf_location || 'Central Stack',
+            total: b.total !== undefined ? b.total : (b.total_copies || 1),
+            available: b.available !== undefined ? b.available : (b.available_copies || 1),
+            publisher: b.publisher,
+            edition: b.edition,
+            copies_detail: Array.isArray(b.copies_detail)
+              ? b.copies_detail.map(cp => ({
+                  ...cp,
+                  serial_no: String(cp.serial_no || '').replace(/[\s\-_]/g, ''),
+                  accession: String(cp.accession || '').replace(/[\s\-_]/g, ''),
+                  barcode: String(cp.barcode || '').replace(/[\s\-_]/g, '')
+                }))
+              : []
+          }));
+          setBooks(nonDemoBooks);
+          try { localStorage.setItem('lm_books', JSON.stringify(nonDemoBooks)); } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem('lm_loans', JSON.stringify(loans)); } catch {}
@@ -347,43 +232,32 @@ export default function App() {
     try { localStorage.setItem('lm_reservations', JSON.stringify(reservations)); } catch {}
   }, [reservations]);
 
-  // Sync enrolled patrons from backend API
+  // Sync enrolled patrons from backend API (live from MongoDB)
   useEffect(() => {
     fetch('/api/users')
       .then(res => res.json())
       .then(data => {
         if (data && data.users && Array.isArray(data.users)) {
-          setStudents(prev => {
-            const merged = [...prev];
-            data.users.forEach(u => {
-              const pid = u.patron_id || u.rollNo || `PATRON-${u.id}`;
-              const exists = merged.some(s => s.id === pid || s.rollNo === pid || s.email === u.email);
-              if (!exists) {
-                merged.push({
-                  id: pid,
-                  name: u.full_name || u.name,
-                  rollNo: pid,
-                  email: u.email,
-                  department: u.department || 'Engineering',
-                  phone: u.phone,
-                  year: 'Enrolled Member',
-                  status: u.status || 'Active',
-                  borrowedCount: u.borrowedCount || 0,
-                  fineBalance: u.fineBalance || 0
-                });
-              }
-            });
-            return merged;
-          });
+          const liveStudents = data.users.map(u => ({
+            id: u.patron_id || u.rollNo || u.id,
+            name: u.full_name || u.name,
+            rollNo: u.patron_id || u.rollNo || u.id,
+            email: u.email,
+            department: u.department || 'General',
+            phone: u.phone || '',
+            role: u.role,
+            status: u.status || 'Active',
+            borrowedCount: u.borrowedCount || 0,
+            fineBalance: u.fineBalance || 0
+          }));
+          setStudents(liveStudents);
         }
       })
       .catch(() => {});
   }, []);
 
   const [auditLogs, setAuditLogs] = useState([
-    { id: 1, time: '12:30:00', text: 'SYSTEM ONLINE: Node.js + Express REST API verified. ACID ledger ready.' },
-    { id: 2, time: '12:00:00', text: 'CRON SCAN: Evaluated active loans. Rahul Verma (STU-2024-ME019) overdue by 5 days. Accrued ₹25.00 fine.' },
-    { id: 3, time: '11:15:00', text: 'CIRCULATION DESK: Priya Sharma borrowed ACC-ENG-0412. Due: 14 Nov 2026.' }
+    { id: 1, time: '12:00:00', text: 'SYSTEM ONLINE: Node.js Express REST API connected to MongoDB Atlas. Live patron catalog ready.' }
   ]);
 
   const [selectedFineForUpi, setSelectedFineForUpi] = useState(null);
@@ -414,17 +288,14 @@ export default function App() {
     const roleLower = (user.role || '').toLowerCase();
     if (roleLower.includes('admin') || roleLower.includes('superadmin')) {
       setCurrentRole('superadmin');
-      setCurrentTab('admin_dashboard');
     } else if (roleLower.includes('librarian')) {
       setCurrentRole('librarian');
-      setCurrentTab('admin_dashboard');
     } else if (roleLower.includes('staff')) {
       setCurrentRole('substaff');
-      setCurrentTab('admin_dashboard');
     } else {
       setCurrentRole('student');
-      setCurrentTab('student_dashboard');
     }
+    setCurrentTab('dashboard');
 
     if (user.patron_id) {
       setCurrentStudentId(user.patron_id);
@@ -773,25 +644,62 @@ export default function App() {
     addAuditLog(`PATRON PROFILE: Updated contact details/avatar for ${updatedStudent.name} (${updatedStudent.id || updatedStudent.rollNo}).`);
   };
 
-  // Add Book (Catalog Acquisition)
-  const handleAddBook = (newBook) => {
-    setBooks(prev => [newBook, ...prev]);
-    addToast(`Textbook "${newBook.title}" added with ${newBook.total} copies at ${newBook.shelf}!`, 'success');
-    addAuditLog(`CATALOG ACQUISITION: Added "${newBook.title}" [${newBook.accession}], ${newBook.total} copies at ${newBook.shelf}.`);
+  // Add Book (Create Book) via MongoDB REST API
+  const handleAddBook = async (newBook) => {
+    try {
+      const res = await fetch('/api/books', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify(newBook)
+      });
+      const data = await res.json();
+      if (data.book) {
+        setBooks(prev => [data.book, ...prev]);
+        addToast(`Book "${data.book.title}" created successfully!`, 'success');
+      } else {
+        setBooks(prev => [newBook, ...prev]);
+        addToast(`Book "${newBook.title}" created!`, 'success');
+      }
+    } catch {
+      setBooks(prev => [newBook, ...prev]);
+      addToast(`Book "${newBook.title}" created!`, 'success');
+    }
+    addAuditLog(`CREATE BOOK: "${newBook.title}" [${newBook.accession}].`);
   };
 
-  // Update Book
-  const handleUpdateBook = (updatedBook) => {
-    setBooks(prev => prev.map(b => b.id === updatedBook.id ? updatedBook : b));
-    addAuditLog(`CATALOG UPDATE: Updated details for "${updatedBook.title}" (Shelf: ${updatedBook.shelf}).`);
+  // Update Book via MongoDB REST API
+  const handleUpdateBook = async (updatedBook) => {
+    const bookId = updatedBook.id || updatedBook._id;
+    try {
+      await fetch(`/api/books/${bookId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
+        body: JSON.stringify(updatedBook)
+      });
+    } catch {}
+    setBooks(prev => prev.map(b => (b.id === bookId || b._id === bookId) ? updatedBook : b));
+    addToast(`Book "${updatedBook.title}" updated.`, 'success');
+    addAuditLog(`UPDATE BOOK: "${updatedBook.title}".`);
   };
 
-  // Delete Book
-  const handleDeleteBook = (bookId) => {
-    const target = books.find(b => b.id === bookId);
-    setBooks(prev => prev.filter(b => b.id !== bookId));
-    addToast(`Book "${target?.title}" archived from active catalog.`, 'info');
-    addAuditLog(`CATALOG WEEDING: Archived/deleted title "${target?.title}" [${target?.accession}].`);
+  // Delete Book via MongoDB REST API
+  const handleDeleteBook = async (bookId) => {
+    const target = books.find(b => b.id === bookId || b._id === bookId);
+    try {
+      await fetch(`/api/books/${bookId}`, {
+        method: 'DELETE',
+        headers: { ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}) }
+      });
+    } catch {}
+    setBooks(prev => prev.filter(b => b.id !== bookId && b._id !== bookId));
+    addToast(`Book "${target?.title || 'Book'}" deleted from active catalog.`, 'info');
+    addAuditLog(`DELETE BOOK: "${target?.title}" [${target?.accession}].`);
   };
 
   // Settle Fine via Cash
@@ -908,8 +816,8 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex font-sans transition-colors duration-200">
-      {/* Collapsible Sidebar Navigation */}
+    <div className="min-h-screen bg-white text-zinc-900 flex font-sans">
+      {/* Minimal Collapsible Sidebar Navigation */}
       <Sidebar
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
@@ -918,191 +826,102 @@ export default function App() {
         currentUser={currentUser}
         isCollapsed={isSidebarCollapsed}
         setIsCollapsed={setIsSidebarCollapsed}
+        booksCount={books.length}
         activeLoansCount={activeLoansCount}
         overdueFinesCount={overdueFinesCount}
-        studentActiveLoansCount={studentLoans.filter(l => l.status !== 'Returned').length}
-        studentHasOverdue={studentHasOverdue}
-        studentFineAmount={studentFineAmount}
         onLogout={() => handleLogout(true)}
         onToast={addToast}
       />
 
       {/* Main Workspace Area */}
       <div 
-        className={`flex-1 flex flex-col min-h-screen transition-all duration-300 ease-in-out ${
+        className={`flex-1 flex flex-col min-h-screen transition-all duration-200 ease-in-out ${
           isSidebarCollapsed ? 'pl-20' : 'pl-64'
         }`}
       >
-        {/* Top Header Bar */}
-        <TopBar
-          currentTab={currentTab}
-          currentRole={currentRole}
-          isCollapsed={isSidebarCollapsed}
-          setIsCollapsed={setIsSidebarCollapsed}
-          totalPendingFines={totalPendingFines}
-          currentStudentId={currentStudentId}
-          setCurrentStudentId={setCurrentStudentId}
-          authToken={authToken}
-          currentUser={currentUser}
-          onOpenJwtModal={() => setIsJwtModalOpen(true)}
-          onLogout={() => handleLogout(true)}
-          onToast={addToast}
-        />
-
-        {/* Dynamic Main Views */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
-          {/* ==================== STUDENT VIEWS ==================== */}
-          {currentTab === 'student_dashboard' && (
-            <StudentDashboardView
-              currentStudent={currentStudent}
-              studentLoans={studentLoans}
-              studentFines={studentFines}
-              onNavigate={setCurrentTab}
-              onOpenPayFine={(fine) => setSelectedFineForUpi(fine)}
-              books={books}
-              reservations={reservations}
-              onReserveBook={handleReserveBook}
-            />
-          )}
-
-          {currentTab === 'student_catalog' && (
-            <StudentExploreBooksView
-              books={books}
-              reservations={reservations}
-              onReserveBook={handleReserveBook}
-              onCancelReservation={handleCancelReservation}
-              currentStudent={currentStudent}
-              onToast={addToast}
-            />
-          )}
-
-          {currentTab === 'student_my_books' && (
-            <StudentMyBooksView
-              studentLoans={studentLoans}
-              studentFines={studentFines}
-              onRenew={handleRenewLoan}
-              onToast={addToast}
-              onOpenPayFine={(fine) => setSelectedFineForUpi(fine)}
-              reservations={reservations}
-              onCancelReservation={handleCancelReservation}
-              currentStudent={currentStudent}
-            />
-          )}
-
-          {currentTab === 'student_my_fines' && (
-            <StudentMyFinesView
-              studentFines={studentFines}
-              onOpenUpiModal={(fine) => setSelectedFineForUpi(fine)}
-            />
-          )}
-
-          {currentTab === 'student_profile' && (
-            <StudentProfileView
-              currentStudent={currentStudent}
-              hasOverdue={studentHasOverdue}
-              onLogout={() => handleLogout(true)}
-              onUpdateProfile={handleUpdateProfile}
-              onToast={addToast}
-            />
-          )}
-
-          {/* ==================== ADMIN & STAFF VIEWS ==================== */}
-          {currentTab === 'admin_dashboard' && (
-            <AdminDashboardView
+        {/* Dynamic Main Views - Flat, Minimalist & Full-Width */}
+        <main className="flex-1 p-6 sm:p-8 w-full">
+          {/* 1. Dashboard */}
+          {(currentTab === 'dashboard' || currentTab === 'admin_dashboard' || currentTab === 'student_dashboard') && (
+            <DashboardView
               books={books}
               loans={loans}
               fines={fines}
+              students={students}
               auditLogs={auditLogs}
               onNavigate={setCurrentTab}
+              onOpenUpiModal={(fine) => setSelectedFineForUpi(fine)}
+              onOpenWaiveModal={(fine) => setSelectedFineForWaive(fine)}
             />
           )}
 
-          {currentTab === 'admin_in_library' && (
-            <BooksInLibraryView
-              books={books}
-              onSelectIssue={(book) => {
-                setPrefilledBookForIssue(book);
-                setCurrentTab('admin_circulation');
-                addToast(`Selected "${book.title}" [${book.accession}] for checkout at Circulation Desk.`, 'info');
-              }}
-              onToast={addToast}
-            />
-          )}
-
-          {currentTab === 'admin_checked_out' && (
-            <CirculationView
-              books={books}
-              loans={loans}
-              students={students}
-              onIssueBook={handleIssueBook}
-              onReturnBook={handleReturnBook}
-              prefilledBook={prefilledBookForIssue}
-              onClearPrefilled={() => setPrefilledBookForIssue(null)}
-              initialSection="checked_out"
-              onToast={addToast}
-            />
-          )}
-
-          {currentTab === 'admin_circulation' && (
-            <CirculationView
-              books={books}
-              loans={loans}
-              students={students}
-              onIssueBook={handleIssueBook}
-              onReturnBook={handleReturnBook}
-              prefilledBook={prefilledBookForIssue}
-              onClearPrefilled={() => setPrefilledBookForIssue(null)}
-              initialSection="desk"
-              onToast={addToast}
-            />
-          )}
-
-          {currentTab === 'admin_books' && (
-            <AdminBookManagementView
+          {/* 2. Create Book */}
+          {currentTab === 'book_creation' && (
+            <BookCreationView
               books={books}
               onAddBook={handleAddBook}
+              onNavigate={setCurrentTab}
+              onToast={addToast}
+            />
+          )}
+
+          {/* 3. All Books Catalog */}
+          {(currentTab === 'all_books' || currentTab === 'admin_books' || currentTab === 'admin_in_library' || currentTab === 'student_catalog') && (
+            <AllBooksView
+              books={books}
+              loans={loans}
               onUpdateBook={handleUpdateBook}
               onDeleteBook={handleDeleteBook}
+              onSelectIssue={(book) => {
+                setPrefilledBookForIssue(book);
+                setCurrentTab('book_issues_returns');
+                addToast(`Selected "${book.title}" [${book.accession}] for checkout at Circulation Desk.`, 'info');
+              }}
+              onNavigate={setCurrentTab}
               onToast={addToast}
             />
           )}
 
-          {currentTab === 'admin_students' && (
-            <AdminStudentManagementView
-              students={students}
-              onToggleFreeze={handleToggleFreeze}
-              onAddStudent={handleAddStudent}
+          {/* 4. Book Issues & Returns */}
+          {(currentTab === 'book_issues_returns' || currentTab === 'admin_circulation' || currentTab === 'admin_checked_out' || currentTab === 'admin_fines' || currentTab === 'student_my_books' || currentTab === 'student_my_fines') && (
+            <BookIssuesReturnsView
+              books={books}
               loans={loans}
-              fines={fines}
-              onToast={addToast}
-            />
-          )}
-
-          {currentTab === 'admin_fines' && (
-            <AdminOverdueFinesView
-              fines={fines}
+              students={students}
+              onIssueBook={handleIssueBook}
+              onReturnBook={handleReturnBook}
+              onRenewLoan={handleRenewLoan}
               onCollectCash={handleCollectCash}
               onOpenUpiModal={(fine) => setSelectedFineForUpi(fine)}
               onOpenWaiveModal={(fine) => setSelectedFineForWaive(fine)}
-              currentRole={currentRole}
-            />
-          )}
-
-          {currentTab === 'admin_permissions' && (
-            <AdminPermissionsView
+              prefilledBook={prefilledBookForIssue}
+              onClearPrefilled={() => setPrefilledBookForIssue(null)}
+              initialSection={currentTab === 'admin_checked_out' ? 'loans' : currentTab === 'admin_fines' ? 'return' : 'issue'}
               onToast={addToast}
             />
           )}
 
-          {currentTab === 'admin_logs' && (
-            <AdminAuditLogsView
-              auditLogs={auditLogs}
+          {/* 5. User Management */}
+          {(currentTab === 'user_management' || currentTab === 'admin_students' || currentTab === 'admin_permissions' || currentTab === 'admin_logs' || currentTab === 'student_profile') && (
+            <UserManagementView
+              students={students}
+              loans={loans}
+              fines={fines}
+              onAddStudent={handleAddStudent}
+              onToggleFreeze={handleToggleFreeze}
+              onToast={addToast}
+            />
+          )}
+
+          {/* 6. Settings */}
+          {currentTab === 'settings' && (
+            <SettingsView
+              authToken={authToken}
+              currentUser={currentUser}
+              onToast={addToast}
             />
           )}
         </main>
-
-        {/* Footer */}
-        <Footer onSwitchTab={setCurrentTab} />
       </div>
 
       {/* Interactive UPI QR Modal */}

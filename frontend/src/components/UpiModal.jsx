@@ -33,13 +33,13 @@ export function UpiModal({ isOpen, onClose, fine, onConfirmPayment }) {
         <div className="p-6 text-center">
           <div className="text-xs text-slate-500">Fine Due for:</div>
           <div className="font-bold text-base text-slate-900 dark:text-white mt-0.5">
-            {fine.patronName || 'Rahul Verma'} ({fine.patronId || 'STU-2024-ME019'})
+            {fine.patronName || 'Registered Patron'} {fine.patronId ? `(${fine.patronId})` : ''}
           </div>
           <div className="text-2xl font-extrabold text-blue-600 dark:text-blue-400 mt-2">
             ₹{Number(fine.amount).toFixed(2)}
           </div>
           <div className="text-[11px] text-slate-400">
-            5 Days Overdue @ ₹5.00/day
+            {fine.daysOverdue ? `${fine.daysOverdue} Days Overdue @ ₹5.00/day` : 'Circulation Overdue Fine'}
           </div>
 
           {/* Scannable Authentic QR Code Box */}

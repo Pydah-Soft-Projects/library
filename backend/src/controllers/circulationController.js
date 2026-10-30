@@ -1,10 +1,11 @@
 const db = require('../config/db');
+const User = require('../models/User');
 const { logAudit } = require('../services/auditService');
 
 const LOAN_DAYS = 30;
 const DAILY_FINE_RATE = 5.0; // ₹5 / day
 
-function issueBook(req, res) {
+async function issueBook(req, res) {
   const { barcode, patron_id, user_id } = req.body || {};
 
   // 1. Find book
@@ -18,43 +19,34 @@ function issueBook(req, res) {
     return res.status(400).json({ error: `All copies of "${book.title}" are currently on loan.` });
   }
 
-  // 3. Find patron strictly from registered members
+  // 3. Find patron strictly from registered MongoDB members
   let student = null;
   if (patron_id) {
-    const cleanId = String(patron_id).trim().toLowerCase();
-    student = db.users.find(u => 
-      (u.patron_id && u.patron_id.toLowerCase() === cleanId) || 
-      (u.email && u.email.toLowerCase() === cleanId) ||
-      (u.full_name && u.full_name.toLowerCase() === cleanId)
-    );
-
-    // If patron was enrolled in frontend (e.g., Ananya, Karthik, or new signups):
-    if (!student && req.body.patron_name && (cleanId.startsWith('stu-') || cleanId.startsWith('fac-'))) {
-      const newId = db.users.length > 0 ? Math.max(...db.users.map(u => u.id)) + 1 : 1;
-      student = {
-        id: newId,
-        role_id: 4,
-        full_name: req.body.patron_name,
-        email: `${cleanId.replace(/[^a-z0-9]/g, '')}@college.edu.in`,
-        phone: '+91 98450 ' + String(10000 + newId),
-        patron_id: patron_id,
-        department: req.body.department || 'Engineering',
-        status: 'Active',
-        created_at: new Date()
-      };
-      db.users.push(student);
-    }
+    const cleanId = String(patron_id).trim();
+    student = await User.findOne({
+      $or: [
+        { patron_id: cleanId.toUpperCase() },
+        { patron_id: cleanId },
+        { email: cleanId.toLowerCase() },
+        { username: cleanId.toLowerCase() },
+        { full_name: new RegExp(`^${cleanId}$`, 'i') }
+      ]
+    });
   } else if (user_id) {
-    student = db.users.find(u => u.id === parseInt(user_id, 10));
+    try {
+      student = await User.findById(user_id);
+    } catch (_) {}
   }
 
   if (!student) {
-    return res.status(404).json({ error: `Cannot issue book: Patron "${patron_id || 'Unknown'}" is not registered in the campus library database. Please onboard the patron first.` });
+    return res.status(404).json({ error: `Cannot issue book: Patron "${patron_id || user_id || 'Unknown'}" is not registered in the library database. Please register the member first.` });
   }
 
-  // 4. Verify Account Hold / Overdue Check (Section 5.3 of README)
-  const existingOverdues = db.borrow_records.filter(r => r.user_id === student.id && r.status === 'Overdue');
-  const unpaidFines = db.fines.filter(f => f.user_id === student.id && f.status === 'Unpaid');
+  const patronDocId = student._id.toString();
+
+  // 4. Verify Account Hold / Overdue Check
+  const existingOverdues = db.borrow_records.filter(r => String(r.user_id) === patronDocId && r.status === 'Overdue');
+  const unpaidFines = db.fines.filter(f => String(f.user_id) === patronDocId && f.status === 'Unpaid');
 
   if (existingOverdues.length > 0 || unpaidFines.length > 0) {
     const totalDues = unpaidFines.reduce((sum, f) => sum + f.amount, 0);
@@ -65,7 +57,7 @@ function issueBook(req, res) {
     });
   }
 
-  // 5. Calculate due date (preset 7, 14, 21, 30 days, manual date, or default)
+  // 5. Calculate due date
   const issueDate = new Date();
   let dueDate = new Date();
   if (req.body.due_date) {
@@ -85,9 +77,11 @@ function issueBook(req, res) {
 
   const loanRecord = {
     id: db.borrow_records.length + 1,
-    user_id: student.id,
+    user_id: patronDocId,
+    patron_id: student.patron_id || `PATRON-${patronDocId.slice(-4)}`,
+    patron_name: student.full_name,
     book_id: book.id,
-    staff_id: 3, // Desk Assistant
+    staff_id: req.user?.userId || 'ADMIN',
     issue_date: issueDate.toISOString(),
     due_date: dueDate.toISOString(),
     return_date: null,
@@ -97,7 +91,7 @@ function issueBook(req, res) {
   db.borrow_records.push(loanRecord);
 
   logAudit({
-    actor_id: 3,
+    actor_id: req.user?.userId || 'SYSTEM',
     action_key: 'circulation.issue',
     target_resource: `LOAN:${loanRecord.id}`,
     payload: {
@@ -173,7 +167,7 @@ function returnBook(req, res) {
   }
 
   logAudit({
-    actor_id: 3,
+    actor_id: req.user?.userId || 'SYSTEM',
     action_key: 'circulation.return',
     target_resource: `LOAN:${record.id}`,
     payload: {
@@ -191,23 +185,31 @@ function returnBook(req, res) {
   });
 }
 
-function getActiveLoans(req, res) {
-  const active = db.borrow_records.filter(r => r.status === 'Borrowed' || r.status === 'Overdue').map(r => {
-    const b = db.books.find(book => book.id === r.book_id);
-    const u = db.users.find(user => user.id === r.user_id);
-    return {
-      ...r,
-      book_title: b ? b.title : 'Unknown',
-      accession_no: b ? b.accession_no : 'Unknown',
-      patron_name: u ? u.full_name : 'Unknown',
-      patron_id: u ? u.patron_id : 'Unknown'
-    };
-  });
+async function getActiveLoans(req, res) {
+  try {
+    const users = await User.find().select('full_name patron_id').lean();
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
 
-  res.json({
-    total: active.length,
-    loans: active
-  });
+    const active = db.borrow_records.filter(r => r.status === 'Borrowed' || r.status === 'Overdue').map(r => {
+      const b = db.books.find(book => book.id === r.book_id);
+      const u = userMap.get(String(r.user_id));
+      return {
+        ...r,
+        book_title: b ? b.title : 'Unknown',
+        accession_no: b ? b.accession_no : 'Unknown',
+        patron_name: u ? u.full_name : (r.patron_name || 'Unknown'),
+        patron_id: u ? u.patron_id : (r.patron_id || 'Unknown')
+      };
+    });
+
+    res.json({
+      total: active.length,
+      loans: active
+    });
+  } catch (err) {
+    console.error('Error fetching active loans:', err);
+    res.status(500).json({ error: 'Failed to retrieve active loans' });
+  }
 }
 
 module.exports = {
