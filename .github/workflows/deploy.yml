@@ -42,7 +42,7 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         env:
-          VITE_API_URL: /api
+          VITE_API_URL: https://library-backend.pydah.edu.in/
           VITE_CRM_FRONTEND_URL: https://crm.pydah.edu.in
           VITE_CRM_BACKEND_URL: https://crm.pydah.edu.in
         run: |
