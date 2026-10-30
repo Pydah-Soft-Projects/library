@@ -37,7 +37,7 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: |
-          npm ci
+          npm i
 
       - name: Build frontend
         working-directory: frontend
