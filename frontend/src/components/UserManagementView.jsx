@@ -751,7 +751,7 @@ export default function UserManagementView({ onToast }) {
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-zinc-200 bg-zinc-50/50 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                    <th className="py-3 px-3">HRMS ID & Member</th>
+                    <th className="py-3 px-3">Member & Employee ID</th>
                     <th className="py-3 px-3">Department & Division</th>
                     <th className="py-3 px-3">Assigned Role</th>
                     <th className="py-3 px-3">Allowed Page Privileges</th>
@@ -775,7 +775,9 @@ export default function UserManagementView({ onToast }) {
                             </div>
                             <div>
                               <div className="font-semibold text-zinc-900">{user.name}</div>
-                              <span className="font-mono text-[11px] text-zinc-500">HRMS #{user.emp_no}</span>
+                              <span className="font-mono text-[11px] text-zinc-500">
+                                {user.source === 'Database User' ? `ID: ${user.emp_no}` : `HRMS #${user.emp_no}`}
+                              </span>
                             </div>
                           </div>
                         </td>

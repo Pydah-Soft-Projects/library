@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { 
   BookOpen, Plus, Sparkles, RefreshCw, Layers, MapPin, 
   Check, ArrowRight, Hash, Bookmark, Eye, CheckCircle2,
   X, Tag, Barcode, Copy, Trash2, FolderPlus, Search, List,
   FileSpreadsheet, UploadCloud, Download, AlertCircle, FileText, CheckCircle,
-  Upload, SlidersHorizontal
+  Upload, SlidersHorizontal, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 
 export default function BookCreationView({ 
@@ -76,12 +76,74 @@ export default function BookCreationView({
   const [parsedBooks, setParsedBooks] = useState([]);
   const [parseSummary, setParseSummary] = useState(null); // { totalRows, validCount, invalidCount }
   const [excelSearchTerm, setExcelSearchTerm] = useState('');
+  const [excelPageSize, setExcelPageSize] = useState(15);
+  const [excelCurrentPage, setExcelCurrentPage] = useState(1);
   const [defaultUploadCategory, setDefaultUploadCategory] = useState('');
   const [defaultUploadShelf, setDefaultUploadShelf] = useState('Central Stack');
   const [isImporting, setIsImporting] = useState(false);
   const [importCompleted, setImportCompleted] = useState(false);
   const [importCount, setImportCount] = useState(0);
   const fileInputRef = useRef(null);
+
+  // Catalog Tab Search & Pagination State
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogPageSize, setCatalogPageSize] = useState(15);
+  const [catalogCurrentPage, setCatalogCurrentPage] = useState(1);
+
+  // Reset Excel pagination when search, page size, or parsed list changes
+  useEffect(() => {
+    setExcelCurrentPage(1);
+  }, [excelSearchTerm, excelPageSize, parsedBooks.length]);
+
+  // Reset Catalog pagination when search or page size changes
+  useEffect(() => {
+    setCatalogCurrentPage(1);
+  }, [catalogSearch, catalogPageSize]);
+
+  // Filtered & Paginated Excel Parsed Books
+  const filteredParsedBooks = useMemo(() => {
+    if (!excelSearchTerm) return parsedBooks;
+    const q = excelSearchTerm.toLowerCase();
+    return parsedBooks.filter(b => (
+      b.title.toLowerCase().includes(q) ||
+      b.author.toLowerCase().includes(q) ||
+      b.accession.toLowerCase().includes(q) ||
+      b.category.toLowerCase().includes(q) ||
+      (b.titleId && b.titleId.toLowerCase().includes(q))
+    ));
+  }, [parsedBooks, excelSearchTerm]);
+
+  const excelTotalPages = Math.max(1, Math.ceil(filteredParsedBooks.length / excelPageSize));
+  const safeExcelPage = Math.min(Math.max(1, excelCurrentPage), excelTotalPages);
+  const excelStartItem = filteredParsedBooks.length === 0 ? 0 : (safeExcelPage - 1) * excelPageSize + 1;
+  const excelEndItem = Math.min(safeExcelPage * excelPageSize, filteredParsedBooks.length);
+  const paginatedParsedBooks = useMemo(() => {
+    return filteredParsedBooks.slice((safeExcelPage - 1) * excelPageSize, safeExcelPage * excelPageSize);
+  }, [filteredParsedBooks, safeExcelPage, excelPageSize]);
+
+  const filteredParsedCopiesCount = useMemo(() => {
+    return filteredParsedBooks.reduce((sum, b) => sum + (b.total || 1), 0);
+  }, [filteredParsedBooks]);
+
+  // Filtered & Paginated Catalog Books
+  const filteredCatalogBooks = useMemo(() => {
+    if (!catalogSearch) return books;
+    const q = catalogSearch.toLowerCase();
+    return books.filter(b => (
+      (b.title && b.title.toLowerCase().includes(q)) ||
+      (b.author && b.author.toLowerCase().includes(q)) ||
+      (b.accession && String(b.accession).toLowerCase().includes(q)) ||
+      (b.category && b.category.toLowerCase().includes(q))
+    ));
+  }, [books, catalogSearch]);
+
+  const catalogTotalPages = Math.max(1, Math.ceil(filteredCatalogBooks.length / catalogPageSize));
+  const safeCatalogPage = Math.min(Math.max(1, catalogCurrentPage), catalogTotalPages);
+  const catalogStartItem = filteredCatalogBooks.length === 0 ? 0 : (safeCatalogPage - 1) * catalogPageSize + 1;
+  const catalogEndItem = Math.min(safeCatalogPage * catalogPageSize, filteredCatalogBooks.length);
+  const paginatedCatalogBooks = useMemo(() => {
+    return filteredCatalogBooks.slice((safeCatalogPage - 1) * catalogPageSize, safeCatalogPage * catalogPageSize);
+  }, [filteredCatalogBooks, safeCatalogPage, catalogPageSize]);
 
   // Helper to extract highest serial / accession number from catalog
   const getHighestSerialNumber = (bookList) => {
@@ -742,20 +804,61 @@ export default function BookCreationView({
       {/* ============================================================ */}
       {activeTab === 'catalog' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between text-xs text-zinc-500">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-zinc-500">
             <span>Click "+ Create Book" above to open the popup and accession new titles with sequential copy serial numbers.</span>
-            <span>{books.length} Books Registered</span>
+            <span className="font-semibold text-zinc-700">{books.length} Books Registered</span>
           </div>
 
-          {books.length === 0 ? (
-            <div className="py-16 text-center text-xs text-zinc-400 border-t border-b border-zinc-200">
-              No books registered in library yet. Click "+ Create Book" above to accession your first title.
+          {/* Search & Dynamic Page Size Selector */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input
+                type="text"
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog books by title, author, category, or accession..."
+                className="w-full pl-9 pr-4 py-2 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                <span className="hidden sm:inline">Per page:</span>
+                <select
+                  value={catalogPageSize}
+                  onChange={(e) => {
+                    setCatalogPageSize(Number(e.target.value));
+                    setCatalogCurrentPage(1);
+                  }}
+                  className="px-2 py-1.5 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                  title="Change items per page"
+                >
+                  <option value={10}>10</option>
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+
+              <div className="text-xs text-slate-600 shrink-0 font-medium">
+                Showing <strong>{catalogStartItem} - {catalogEndItem}</strong> of <strong>{filteredCatalogBooks.length.toLocaleString()}</strong> books
+              </div>
+            </div>
+          </div>
+
+          {filteredCatalogBooks.length === 0 ? (
+            <div className="py-16 text-center text-xs text-zinc-400 border border-zinc-200 rounded-xl">
+              {books.length === 0 
+                ? 'No books registered in library yet. Click "+ Create Book" above to accession your first title.'
+                : 'No books match your search criteria.'}
             </div>
           ) : (
-            <div className="border-t border-b border-zinc-200 overflow-x-auto w-full">
+            <div className="border border-zinc-200 rounded-xl overflow-x-auto w-full shadow-2xs">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="border-b border-zinc-200 bg-zinc-50/50 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+                  <tr className="border-b border-zinc-200 bg-zinc-50/70 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
                     <th className="py-3 px-3">Title & Author</th>
                     <th className="py-3 px-3">Category & Code</th>
                     <th className="py-3 px-3">Accession / Barcode Base</th>
@@ -766,7 +869,7 @@ export default function BookCreationView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
-                  {books.map((book, index) => {
+                  {paginatedCatalogBooks.map((book, index) => {
                     const copiesCount = book.total !== undefined ? book.total : (book.total_copies || 1);
                     const copiesList = Array.isArray(book.copies_detail) && book.copies_detail.length > 0
                       ? book.copies_detail
@@ -833,6 +936,116 @@ export default function BookCreationView({
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Dynamic Pagination Bar for Catalog Books */}
+          {filteredCatalogBooks.length > 0 && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 pb-1 border-t border-zinc-200 text-xs">
+              {/* Left: Item range count & dynamic rows per page selector */}
+              <div className="flex items-center gap-4 flex-wrap">
+                <span className="text-zinc-500 font-medium">
+                  Showing <strong className="text-zinc-900 font-semibold">{catalogStartItem}</strong> to <strong className="text-zinc-900 font-semibold">{catalogEndItem}</strong> of <strong className="text-zinc-900 font-semibold">{filteredCatalogBooks.length}</strong> Books
+                </span>
+
+                <div className="flex items-center gap-1.5 text-zinc-500">
+                  <span>Section size:</span>
+                  <select
+                    value={catalogPageSize}
+                    onChange={(e) => {
+                      setCatalogPageSize(Number(e.target.value));
+                      setCatalogCurrentPage(1);
+                    }}
+                    className="px-2 py-1 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                    title="Change items per page"
+                  >
+                    <option value={10}>10 per page</option>
+                    <option value={15}>15 per page</option>
+                    <option value={25}>25 per page</option>
+                    <option value={50}>50 per page</option>
+                    <option value={100}>100 per page</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Right: Page navigation buttons & Page X of Y */}
+              <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                <span className="text-zinc-500 mr-1.5 text-[11px]">
+                  Page <strong className="text-zinc-800">{safeCatalogPage}</strong> of <strong className="text-zinc-800">{catalogTotalPages}</strong>
+                </span>
+
+                <button
+                  type="button"
+                  disabled={safeCatalogPage <= 1}
+                  onClick={() => setCatalogCurrentPage(1)}
+                  className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                  title="First Section"
+                >
+                  <ChevronsLeft className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={safeCatalogPage <= 1}
+                  onClick={() => setCatalogCurrentPage(prev => Math.max(prev - 1, 1))}
+                  className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                  title="Previous Section"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Numerical Section / Page Buttons */}
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: catalogTotalPages }, (_, i) => i + 1)
+                    .filter(p => p === 1 || p === catalogTotalPages || (p >= safeCatalogPage - 2 && p <= safeCatalogPage + 2))
+                    .reduce((acc, p, idx, arr) => {
+                      if (idx > 0 && p - arr[idx - 1] > 1) {
+                        acc.push(`ellipsis-${p}`);
+                      }
+                      acc.push(p);
+                      return acc;
+                    }, [])
+                    .map((item) => {
+                      if (typeof item === 'string') {
+                        return <span key={item} className="px-1 text-zinc-400 select-none">...</span>;
+                      }
+                      return (
+                        <button
+                          key={item}
+                          type="button"
+                          onClick={() => setCatalogCurrentPage(item)}
+                          className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                            item === safeCatalogPage
+                              ? 'bg-zinc-900 text-white shadow-2xs'
+                              : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                          }`}
+                        >
+                          {item}
+                        </button>
+                      );
+                    })}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={safeCatalogPage >= catalogTotalPages}
+                  onClick={() => setCatalogCurrentPage(prev => Math.min(prev + 1, catalogTotalPages))}
+                  className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                  title="Next Section"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={safeCatalogPage >= catalogTotalPages}
+                  onClick={() => setCatalogCurrentPage(catalogTotalPages)}
+                  className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                  title="Last Section"
+                >
+                  <ChevronsRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -1129,7 +1342,7 @@ export default function BookCreationView({
                 </div>
               </div>
 
-              {/* Search Filter in Parsed Rows with live counts */}
+              {/* Search Filter in Parsed Rows with live counts & per-page dropdown */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
@@ -1141,31 +1354,33 @@ export default function BookCreationView({
                     className="w-full pl-9 pr-4 py-2 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:outline-none focus:border-emerald-600"
                   />
                 </div>
-                <div className="text-xs text-slate-600 shrink-0 font-medium">
-                  Showing <strong>{parsedBooks.filter(b => {
-                    if (!excelSearchTerm) return true;
-                    const q = excelSearchTerm.toLowerCase();
-                    return (
-                      b.title.toLowerCase().includes(q) ||
-                      b.author.toLowerCase().includes(q) ||
-                      b.accession.toLowerCase().includes(q) ||
-                      b.category.toLowerCase().includes(q) ||
-                      (b.titleId && b.titleId.toLowerCase().includes(q))
-                    );
-                  }).length.toLocaleString()}</strong> of <strong>{parsedBooks.length.toLocaleString()}</strong> titles
-                  <span className="text-slate-400 ml-1.5">
-                    ({parsedBooks.filter(b => {
-                      if (!excelSearchTerm) return true;
-                      const q = excelSearchTerm.toLowerCase();
-                      return (
-                        b.title.toLowerCase().includes(q) ||
-                        b.author.toLowerCase().includes(q) ||
-                        b.accession.toLowerCase().includes(q) ||
-                        b.category.toLowerCase().includes(q) ||
-                        (b.titleId && b.titleId.toLowerCase().includes(q))
-                      );
-                    }).reduce((sum, b) => sum + b.total, 0).toLocaleString()} copies)
-                  </span>
+
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                    <span className="hidden sm:inline">Per page:</span>
+                    <select
+                      value={excelPageSize}
+                      onChange={(e) => {
+                        setExcelPageSize(Number(e.target.value));
+                        setExcelCurrentPage(1);
+                      }}
+                      className="px-2 py-1.5 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                      title="Change items per page"
+                    >
+                      <option value={10}>10</option>
+                      <option value={15}>15</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                  </div>
+
+                  <div className="text-xs text-slate-600 shrink-0 font-medium">
+                    Showing <strong>{excelStartItem} - {excelEndItem}</strong> of <strong>{filteredParsedBooks.length.toLocaleString()}</strong> titles
+                    <span className="text-slate-400 ml-1.5">
+                      ({filteredParsedCopiesCount.toLocaleString()} copies)
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1185,119 +1400,87 @@ export default function BookCreationView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100">
-                    {parsedBooks
-                      .filter(b => {
-                        if (!excelSearchTerm) return true;
-                        const q = excelSearchTerm.toLowerCase();
-                        return (
-                          b.title.toLowerCase().includes(q) ||
-                          b.author.toLowerCase().includes(q) ||
-                          b.accession.toLowerCase().includes(q) ||
-                          b.category.toLowerCase().includes(q) ||
-                          (b.titleId && b.titleId.toLowerCase().includes(q))
-                        );
-                      })
-                      .map((book) => {
-                        const allSerialsStr = book.copies_detail?.map(c => c.accession).join(', ') || book.accession;
-                        return (
-                          <tr
-                            key={book.id}
-                            className="hover:bg-zinc-50/80 transition-colors"
-                          >
-                            <td className="py-2.5 px-3 text-[11px] text-zinc-400 font-mono text-center align-middle">
-                              {book.rowNumber}
-                            </td>
-                            <td className="py-2.5 px-3 align-middle">
-                              <div className="font-bold text-zinc-900 truncate" title={book.title}>{book.title}</div>
-                              {book.titleId && (
-                                <span className="text-[10px] text-blue-700 font-mono font-medium block">
-                                  TitleId: {book.titleId}
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-center align-middle">
-                              <span className="inline-block px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
-                                {book.total} {book.total === 1 ? 'Copy' : 'Copies'}
+                    {paginatedParsedBooks.map((book) => {
+                      const allSerialsStr = book.copies_detail?.map(c => c.accession).join(', ') || book.accession;
+                      return (
+                        <tr
+                          key={book.id}
+                          className="hover:bg-zinc-50/80 transition-colors"
+                        >
+                          <td className="py-2.5 px-3 text-[11px] text-zinc-400 font-mono text-center align-middle">
+                            {book.rowNumber}
+                          </td>
+                          <td className="py-2.5 px-3 align-middle">
+                            <div className="font-bold text-zinc-900 truncate" title={book.title}>{book.title}</div>
+                            {book.titleId && (
+                              <span className="text-[10px] text-blue-700 font-mono font-medium block">
+                                TitleId: {book.titleId}
                               </span>
-                            </td>
-                            <td className="py-2.5 px-3 align-middle">
-                              <div className="font-mono font-bold text-zinc-900 text-xs">
-                                Acc: #{book.accession}
-                              </div>
-                              {book.copies_detail && book.copies_detail.length > 1 ? (
-                                <div 
-                                  className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate cursor-help"
-                                  title={`All Serials: ${allSerialsStr}`}
-                                >
-                                  {book.total} copies (#{book.copies_detail[0]?.accession} to #{book.copies_detail[book.copies_detail.length - 1]?.accession})
-                                </div>
-                              ) : (
-                                <span className="text-[10px] text-zinc-400 font-mono block mt-0.5">Single accession</span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-zinc-600 align-middle">
-                              <div className="font-medium text-zinc-800 truncate" title={book.author}>{book.author}</div>
-                              <div className="text-[11px] text-zinc-400 truncate" title={`${book.publisher} (${book.edition})`}>
-                                {book.publisher} • {book.edition}
-                              </div>
-                            </td>
-                            <td className="py-2.5 px-3 text-center align-middle">
-                              {book.hasFileCategory ? (
-                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 truncate max-w-[100px]" title={book.category}>
-                                  {book.category}
-                                </span>
-                              ) : (
-                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] text-zinc-500 bg-zinc-100 border border-zinc-200 truncate max-w-[100px]">
-                                  {defaultUploadCategory || 'General'}
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-zinc-600 font-mono text-[11px] text-center align-middle">
-                              {book.shelf || defaultUploadShelf}
-                            </td>
-                            <td className="py-2.5 px-3 text-center align-middle">
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteParsedRow(book.id)}
-                                className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                                title="Remove from import"
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-center align-middle">
+                            <span className="inline-block px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                              {book.total} {book.total === 1 ? 'Copy' : 'Copies'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 align-middle">
+                            <div className="font-mono font-bold text-zinc-900 text-xs">
+                              Acc: #{book.accession}
+                            </div>
+                            {book.copies_detail && book.copies_detail.length > 1 ? (
+                              <div 
+                                className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate cursor-help"
+                                title={`All Serials: ${allSerialsStr}`}
                               >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                                {book.total} copies (#{book.copies_detail[0]?.accession} to #{book.copies_detail[book.copies_detail.length - 1]?.accession})
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-zinc-400 font-mono block mt-0.5">Single accession</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-zinc-600 align-middle">
+                            <div className="font-medium text-zinc-800 truncate" title={book.author}>{book.author}</div>
+                            <div className="text-[11px] text-zinc-400 truncate" title={`${book.publisher} (${book.edition})`}>
+                              {book.publisher} • {book.edition}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-center align-middle">
+                            {book.hasFileCategory ? (
+                              <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 truncate max-w-[100px]" title={book.category}>
+                                {book.category}
+                              </span>
+                            ) : (
+                              <span className="inline-block px-2 py-0.5 rounded-md text-[10px] text-zinc-500 bg-zinc-100 border border-zinc-200 truncate max-w-[100px]">
+                                {defaultUploadCategory || 'General'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-zinc-600 font-mono text-[11px] text-center align-middle">
+                            {book.shelf || defaultUploadShelf}
+                          </td>
+                          <td className="py-2.5 px-3 text-center align-middle">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteParsedRow(book.id)}
+                              className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                              title="Remove from import"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                   <tfoot className="bg-zinc-50/90 font-bold border-t border-zinc-200 text-xs sticky bottom-0 z-10">
                     <tr>
                       <td className="py-3 px-3 text-center text-zinc-400">Total</td>
                       <td className="py-3 px-3 text-zinc-900 font-bold">
-                        {parsedBooks.filter(b => {
-                          if (!excelSearchTerm) return true;
-                          const q = excelSearchTerm.toLowerCase();
-                          return (
-                            b.title.toLowerCase().includes(q) ||
-                            b.author.toLowerCase().includes(q) ||
-                            b.accession.toLowerCase().includes(q) ||
-                            b.category.toLowerCase().includes(q) ||
-                            (b.titleId && b.titleId.toLowerCase().includes(q))
-                          );
-                        }).length.toLocaleString()} Titles
+                        {filteredParsedBooks.length.toLocaleString()} Titles
                       </td>
                       <td className="py-3 px-3 text-center">
                         <span className="px-2.5 py-0.5 rounded-md bg-blue-100 text-blue-900 font-bold">
-                          {parsedBooks.filter(b => {
-                            if (!excelSearchTerm) return true;
-                            const q = excelSearchTerm.toLowerCase();
-                            return (
-                              b.title.toLowerCase().includes(q) ||
-                              b.author.toLowerCase().includes(q) ||
-                              b.accession.toLowerCase().includes(q) ||
-                              b.category.toLowerCase().includes(q) ||
-                              (b.titleId && b.titleId.toLowerCase().includes(q))
-                            );
-                          }).reduce((sum, b) => sum + b.total, 0).toLocaleString()} Copies
+                          {filteredParsedCopiesCount.toLocaleString()} Copies
                         </span>
                       </td>
                       <td colSpan={5} className="py-3 px-3 text-right text-zinc-500 font-medium">
@@ -1307,6 +1490,116 @@ export default function BookCreationView({
                   </tfoot>
                 </table>
               </div>
+
+              {/* Dynamic Pagination Bar (Load by Sections & Changeable Count) */}
+              {filteredParsedBooks.length > 0 && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 pb-1 border-t border-zinc-200 text-xs">
+                  {/* Left: Item range count & dynamic rows per page selector */}
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <span className="text-zinc-500 font-medium">
+                      Showing <strong className="text-zinc-900 font-semibold">{excelStartItem}</strong> to <strong className="text-zinc-900 font-semibold">{excelEndItem}</strong> of <strong className="text-zinc-900 font-semibold">{filteredParsedBooks.length.toLocaleString()}</strong> Parsed Titles
+                    </span>
+
+                    <div className="flex items-center gap-1.5 text-zinc-500">
+                      <span>Section size:</span>
+                      <select
+                        value={excelPageSize}
+                        onChange={(e) => {
+                          setExcelPageSize(Number(e.target.value));
+                          setExcelCurrentPage(1);
+                        }}
+                        className="px-2 py-1 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                        title="Change items per page"
+                      >
+                        <option value={10}>10 per page</option>
+                        <option value={15}>15 per page</option>
+                        <option value={25}>25 per page</option>
+                        <option value={50}>50 per page</option>
+                        <option value={100}>100 per page</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Right: Page navigation buttons & Page X of Y */}
+                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                    <span className="text-zinc-500 mr-1.5 text-[11px]">
+                      Page <strong className="text-zinc-800">{safeExcelPage}</strong> of <strong className="text-zinc-800">{excelTotalPages}</strong>
+                    </span>
+
+                    <button
+                      type="button"
+                      disabled={safeExcelPage <= 1}
+                      onClick={() => setExcelCurrentPage(1)}
+                      className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                      title="First Section"
+                    >
+                      <ChevronsLeft className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={safeExcelPage <= 1}
+                      onClick={() => setExcelCurrentPage(prev => Math.max(prev - 1, 1))}
+                      className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                      title="Previous Section"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Numerical Section / Page Buttons */}
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: excelTotalPages }, (_, i) => i + 1)
+                        .filter(p => p === 1 || p === excelTotalPages || (p >= safeExcelPage - 2 && p <= safeExcelPage + 2))
+                        .reduce((acc, p, idx, arr) => {
+                          if (idx > 0 && p - arr[idx - 1] > 1) {
+                            acc.push(`ellipsis-${p}`);
+                          }
+                          acc.push(p);
+                          return acc;
+                        }, [])
+                        .map((item) => {
+                          if (typeof item === 'string') {
+                            return <span key={item} className="px-1 text-zinc-400 select-none">...</span>;
+                          }
+                          return (
+                            <button
+                              key={item}
+                              type="button"
+                              onClick={() => setExcelCurrentPage(item)}
+                              className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                                item === safeExcelPage
+                                  ? 'bg-zinc-900 text-white shadow-2xs'
+                                  : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                              }`}
+                            >
+                              {item}
+                            </button>
+                          );
+                        })}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={safeExcelPage >= excelTotalPages}
+                      onClick={() => setExcelCurrentPage(prev => Math.min(prev + 1, excelTotalPages))}
+                      className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                      title="Next Section"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={safeExcelPage >= excelTotalPages}
+                      onClick={() => setExcelCurrentPage(excelTotalPages)}
+                      className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                      title="Last Section"
+                    >
+                      <ChevronsRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

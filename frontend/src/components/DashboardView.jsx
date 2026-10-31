@@ -25,96 +25,101 @@ export default function DashboardView({
   const activePatrons = students.filter(s => s.status !== 'Frozen').length;
   const frozenPatrons = students.filter(s => s.status === 'Frozen').length;
 
+  const getSingleBookNumber = (raw) => {
+    if (!raw) return '1';
+    const s = String(raw).trim();
+    if (s.includes('-')) {
+      const parts = s.split('-').map(p => p.trim());
+      return parts[0] || '1';
+    }
+    return s;
+  };
+
   const metrics = [
     {
       label: 'All Books',
-      value: totalTitles,
-      sub: `${availableCopies} on shelf (${totalCopies} copies)`,
+      value: totalTitles.toLocaleString(),
+      sub: `${availableCopies.toLocaleString()} on shelf (${totalCopies.toLocaleString()} copies)`,
       tab: 'all_books',
-      highlight: false,
-      color: 'blue'
+      highlight: false
     },
     {
       label: 'Active Loans',
-      value: activeLoans.length,
-      sub: 'Standard 30-day window',
+      value: activeLoans.length.toLocaleString(),
+      sub: 'Standard 30-day lending window',
       tab: 'book_issues_returns',
-      highlight: false,
-      color: 'blue'
+      highlight: false
     },
     {
       label: 'Overdue Defaults',
-      value: overdueLoans.length,
+      value: overdueLoans.length.toLocaleString(),
       sub: overdueLoans.length > 0 ? 'Accounts on penalty hold' : 'No overdue accounts',
       tab: 'book_issues_returns',
-      highlight: overdueLoans.length > 0,
-      color: overdueLoans.length > 0 ? 'rose' : 'blue'
+      highlight: overdueLoans.length > 0
     },
     {
       label: 'Pending Fines',
       value: `₹${totalFineAmount.toFixed(0)}`,
       sub: `${unpaidFines.length} fee ledgers (₹5/day)`,
       tab: 'book_issues_returns',
-      highlight: totalFineAmount > 0,
-      color: totalFineAmount > 0 ? 'rose' : 'blue'
+      highlight: totalFineAmount > 0
     },
     {
       label: 'Library Users',
-      value: (typeof hrmsUsersCount === 'number') ? hrmsUsersCount : 1,
-      sub: 'Mapped strictly via HRMS',
+      value: ((typeof hrmsUsersCount === 'number') ? hrmsUsersCount : 1).toLocaleString(),
+      sub: 'Institutional accounts & staff',
       tab: 'user_management',
-      highlight: false,
-      color: 'blue'
+      highlight: false
     }
   ];
 
   return (
     <div className="space-y-6">
       {/* Main Heading Only & Quick Action Buttons */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-blue-100">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b-2 border-zinc-200">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-blue-950">
+          <h1 className="text-3xl font-black tracking-tight text-zinc-950">
             Dashboard
           </h1>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs font-bold text-zinc-800 mt-1">
             Real-time library holdings, circulation desk volume, and member accounts
           </p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center gap-2.5 self-start sm:self-auto">
           <button
             onClick={() => onNavigate('book_creation')}
-            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 shadow-xs shadow-blue-500/20"
+            className="px-4 py-2 bg-zinc-950 hover:bg-black text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
           >
-            <Plus className="w-3.5 h-3.5" />
+            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>Create Book</span>
           </button>
           <button
             onClick={() => onNavigate('book_issues_returns')}
-            className="px-3.5 py-2 border border-blue-200 hover:bg-blue-50/80 hover:border-blue-300 text-blue-800 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5"
+            className="px-4 py-2 border-2 border-zinc-900 hover:bg-zinc-100 text-zinc-950 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
           >
-            <ArrowLeftRight className="w-3.5 h-3.5 text-blue-500" />
+            <ArrowLeftRight className="w-3.5 h-3.5 stroke-[2.5] text-zinc-900" />
             <span>Issues & Returns</span>
           </button>
         </div>
       </div>
 
-      {/* Blue Themed Aligned Metric Strip */}
-      <div className="border-t border-b border-blue-100 divide-y sm:divide-y-0 sm:divide-x divide-blue-100 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 py-2 bg-blue-50/30">
+      {/* Bold Dark Themed Metric Strip */}
+      <div className="border-t-2 border-b-2 border-zinc-300 divide-y sm:divide-y-0 sm:divide-x-2 divide-zinc-200 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 py-2 bg-zinc-100/70">
         {metrics.map((m, i) => (
           <div
             key={i}
             onClick={() => onNavigate(m.tab)}
-            className="p-4 cursor-pointer hover:bg-blue-50/70 transition-colors flex flex-col justify-between"
+            className="p-4 cursor-pointer hover:bg-zinc-200/60 transition-colors flex flex-col justify-between"
           >
-            <span className="text-[11px] font-semibold text-blue-800 uppercase tracking-wider block mb-1">
+            <span className="text-xs font-black text-zinc-900 uppercase tracking-wider block mb-1.5">
               {m.label}
             </span>
             <div>
-              <div className={`text-2xl font-bold tracking-tight ${m.highlight ? 'text-rose-600' : 'text-blue-950'}`}>
+              <div className={`text-3xl font-black tracking-tight ${m.highlight ? 'text-rose-700' : 'text-zinc-950'}`}>
                 {m.value}
               </div>
-              <span className="text-[11px] text-blue-600/80 font-medium mt-1 block">
+              <span className="text-xs text-zinc-800 font-bold mt-1.5 block">
                 {m.sub}
               </span>
             </div>
@@ -124,60 +129,60 @@ export default function DashboardView({
 
       {/* Full-Width Data Section: Active Circulations */}
       <div className="space-y-4 pt-2">
-        <div className="flex items-center justify-between pb-2 border-b border-blue-100">
-          <h2 className="text-sm font-semibold text-blue-900 uppercase tracking-wider flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+        <div className="flex items-center justify-between pb-2 border-b-2 border-zinc-200">
+          <h2 className="text-sm font-black text-zinc-950 uppercase tracking-wider flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-zinc-950"></span>
             <span>Active Circulations ({activeLoans.length})</span>
           </h2>
           <button
             onClick={() => onNavigate('book_issues_returns')}
-            className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1"
+            className="text-xs font-black text-zinc-950 hover:text-black flex items-center gap-1 cursor-pointer"
           >
             <span>Circulation Desk</span>
-            <ChevronRight className="w-3.5 h-3.5" />
+            <ChevronRight className="w-3.5 h-3.5 stroke-[2.5]" />
           </button>
         </div>
 
         {activeLoans.length === 0 ? (
-          <div className="py-14 text-center text-xs text-blue-500 bg-blue-50/20 rounded-xl border border-dashed border-blue-200">
+          <div className="py-14 text-center text-xs font-bold text-zinc-700 bg-zinc-100/50 rounded-2xl border-2 border-dashed border-zinc-300">
             No books currently on loan. All physical copies are resting on library shelves.
           </div>
         ) : (
-          <div className="border border-blue-100 rounded-xl overflow-hidden bg-white shadow-xs">
-            <div className="divide-y divide-blue-50">
+          <div className="border-2 border-zinc-200 rounded-2xl overflow-hidden bg-white shadow-xs">
+            <div className="divide-y-2 divide-zinc-100">
               {activeLoans.map(loan => {
                 const isOverdue = loan.status === 'Overdue';
                 return (
                   <div
                     key={loan.id}
-                    className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-blue-50/30 transition-colors"
+                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-zinc-50 transition-colors"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="font-semibold text-blue-950 text-sm">
+                      <div className="font-black text-zinc-950 text-base">
                         {loan.bookTitle}
                       </div>
-                      <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-2">
-                        <span>Borrower: <strong className="text-blue-900 font-semibold">{loan.patronName}</strong> ({loan.patronId})</span>
-                        <span>•</span>
-                        <span>Barcode / Accession: <span className="font-mono text-slate-700">{loan.barcode || loan.accession || 'N/A'}</span></span>
-                        <span>•</span>
-                        <span>Due: <strong className="text-slate-700">{loan.dueDateFormatted || loan.dueDate}</strong></span>
+                      <div className="text-xs font-bold text-zinc-800 mt-1.5 flex flex-wrap items-center gap-2">
+                        <span>Borrower: <strong className="text-zinc-950 font-black">{loan.patronName}</strong> (<span className="text-zinc-900 font-bold">{loan.patronId}</span>)</span>
+                        <span className="text-zinc-400">•</span>
+                        <span>Book No: <span className="font-mono font-black text-zinc-950">#{getSingleBookNumber(loan.barcode || loan.accession)}</span></span>
+                        <span className="text-zinc-400">•</span>
+                        <span>Due Date: <strong className="font-black text-zinc-950">{loan.dueDateFormatted || loan.dueDate}</strong></span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-auto">
                       {isOverdue ? (
-                        <span className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                        <span className="px-3 py-1 rounded-lg text-xs font-black bg-rose-100 text-rose-950 border border-rose-300">
                           Overdue
                         </span>
                       ) : (
-                        <span className="px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200">
+                        <span className="px-3 py-1 rounded-lg text-xs font-black text-emerald-950 bg-emerald-100 border border-emerald-300">
                           On Schedule
                         </span>
                       )}
                       <button
                         onClick={() => onNavigate('book_issues_returns')}
-                        className="text-xs font-semibold text-blue-600 hover:text-blue-800 px-3 py-1.5 hover:bg-blue-50 border border-blue-200 rounded-lg transition-colors"
+                        className="text-xs font-black text-zinc-950 hover:bg-zinc-100 px-3.5 py-1.5 border border-zinc-300 rounded-lg transition-colors cursor-pointer shadow-2xs"
                       >
                         Desk Ops →
                       </button>
@@ -189,14 +194,14 @@ export default function DashboardView({
           </div>
         )}
 
-        <div className="pt-2 flex items-center justify-between text-xs text-blue-700 border-t border-blue-100">
-          <span className="flex items-center gap-1.5 font-medium">
-            <Database className="w-3.5 h-3.5 text-blue-600" />
-            <span>MongoDB Atlas Connected • Dynamic Persistent Catalog</span>
+        <div className="pt-2 flex items-center justify-between text-xs font-bold text-zinc-900 border-t-2 border-zinc-200">
+          <span className="flex items-center gap-1.5 font-bold">
+            <Database className="w-4 h-4 text-zinc-950 stroke-[2.5]" />
+            <span className="text-zinc-950 font-extrabold">MongoDB Atlas Connected • Dynamic Persistent Catalog</span>
           </span>
           <button
             onClick={() => onNavigate('settings')}
-            className="text-blue-600 font-semibold hover:text-blue-800 hover:underline"
+            className="text-zinc-950 font-black hover:text-black hover:underline cursor-pointer"
           >
             System Settings →
           </button>

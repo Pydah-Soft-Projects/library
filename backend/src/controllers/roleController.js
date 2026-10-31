@@ -389,8 +389,8 @@ async function getHrmsUserRoles(req, res) {
     const assignments = await HrmsUserRole.find().sort({ assigned_at: -1 }).lean();
     const map = {};
 
-    // Fetch live employee details directly from HRMS for each assigned user
-    const users = await Promise.all(assignments.map(async (a) => {
+    // 1. Fetch live employee details directly from HRMS for each assigned user
+    const hrmsUsers = await Promise.all(assignments.map(async (a) => {
       map[a.emp_no] = {
         role_name: a.role_name,
         page_privileges: a.page_privileges || [],
@@ -416,10 +416,54 @@ async function getHrmsUserRoles(req, res) {
       };
     }));
 
+    // 2. ALSO fetch all users stored directly in the `User` collection (users table)
+    const dbUsers = await User.find().select('-password').sort({ created_at: -1 }).lean();
+    const existingEmpNos = new Set(assignments.map(a => String(a.emp_no).toLowerCase().trim()));
+
+    const mappedDbUsers = [];
+    for (const u of dbUsers) {
+      const uEmpNo = String(u.patron_id || u.username || u._id).trim();
+      const normEmpNo = uEmpNo.toLowerCase();
+
+      // Avoid duplication if the user is already mapped in HrmsUserRole
+      if (existingEmpNos.has(normEmpNo)) {
+        continue;
+      }
+      existingEmpNos.add(normEmpNo);
+
+      const isSuperadmin = (u.role || '').toLowerCase().trim() === 'superadmin' || normEmpNo === 'superadmin';
+      const userPrivileges = isSuperadmin 
+        ? ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
+        : (u.permissions && u.permissions.length > 0 ? u.permissions : ['dashboard', 'all_books']);
+
+      map[uEmpNo] = {
+        role_name: u.role || (isSuperadmin ? 'Superadmin' : 'Librarian'),
+        page_privileges: userPrivileges,
+        assigned_by: isSuperadmin ? 'System Root' : 'Database',
+        assigned_at: u.created_at || u.createdAt || new Date()
+      };
+
+      mappedDbUsers.push({
+        id: u._id.toString(),
+        emp_no: uEmpNo,
+        name: u.full_name || u.username || `User #${uEmpNo}`,
+        department: u.department || 'Governance & Administration',
+        division: u.division || 'Administration',
+        email: u.email || '',
+        role: u.role || (isSuperadmin ? 'Superadmin' : 'Librarian'),
+        page_privileges: userPrivileges,
+        assigned_by: isSuperadmin ? 'System Root' : 'Database',
+        assigned_at: u.created_at || u.createdAt || new Date(),
+        source: 'Database User'
+      });
+    }
+
+    const allUsers = [...mappedDbUsers, ...hrmsUsers];
+
     res.json({
-      total: assignments.length,
+      total: allUsers.length,
       assignments: map,
-      users
+      users: allUsers
     });
   } catch (err) {
     console.error('Error fetching HRMS user role assignments:', err);
@@ -440,6 +484,15 @@ async function deleteHrmsUserAssignment(req, res) {
     if (!deleted && mongoose.Types.ObjectId.isValid(cleanEmpNo)) {
       deleted = await HrmsUserRole.findByIdAndDelete(cleanEmpNo);
     }
+
+    // ALSO remove from User collection if present
+    await User.findOneAndDelete({
+      $or: [
+        { patron_id: cleanEmpNo },
+        { username: cleanEmpNo.toLowerCase() },
+        { _id: (cleanEmpNo.length === 24 && mongoose.Types.ObjectId.isValid(cleanEmpNo)) ? cleanEmpNo : null }
+      ]
+    });
 
     logAudit({
       actor_id: req.user?.userId || 'SUPERADMIN',

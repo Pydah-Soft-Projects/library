@@ -1204,7 +1204,7 @@ export default function BookIssuesReturnsView({
                             onFocus={() => {
                               if (sdmsResults.length > 0) setIsDropdownOpen(true);
                             }}
-                            placeholder="Type student PIN (e.g. 246T1A0301) or Name (e.g. Damerla Sai Saketh)..."
+                            placeholder="Type student PIN or Name..."
                             className="w-full pl-10 pr-10 py-3 border border-blue-200 rounded-2xl text-xs text-slate-900 bg-blue-50/20 focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition-all font-medium"
                           />
                           {isSearchingSdms && (

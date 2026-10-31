@@ -6,7 +6,7 @@ const { logAudit } = require('../services/auditService');
 
 async function getBooks(req, res) {
   try {
-    const { q, category, available_only } = req.query || {};
+    const { q, category, available_only, page, limit } = req.query || {};
     const query = {};
 
     if (category && category !== 'All') {
@@ -29,7 +29,35 @@ async function getBooks(req, res) {
       query.available = { $gt: 0 };
     }
 
-    const books = await Book.find(query).sort({ created_at: -1 }).lean();
+    // Overall catalog stats via aggregation for instant counts without full scan payload
+    const stats = await Book.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalTitles: { $sum: 1 },
+          totalCopies: { $sum: { $ifNull: ['$total', 1] } },
+          availableCopies: { $sum: { $ifNull: ['$available', '$total'] } }
+        }
+      }
+    ]);
+    const overallStats = stats[0] || { totalTitles: 0, totalCopies: 0, availableCopies: 0 };
+
+    const totalMatching = await Book.countDocuments(query);
+
+    let bookQuery = Book.find(query).sort({ created_at: -1 });
+
+    // Load by parts (sections) when page or limit is supplied
+    const isPaginated = page !== undefined || limit !== undefined;
+    let pageNum = 1;
+    let limitNum = totalMatching;
+
+    if (isPaginated) {
+      pageNum = Math.max(1, parseInt(page) || 1);
+      limitNum = Math.max(1, Math.min(parseInt(limit) || 50, 200));
+      bookQuery = bookQuery.skip((pageNum - 1) * limitNum).limit(limitNum);
+    }
+
+    const books = await bookQuery.lean();
 
     const formattedBooks = books.map(b => ({
       id: b._id.toString(),
@@ -50,7 +78,15 @@ async function getBooks(req, res) {
     }));
 
     res.json({
-      total: formattedBooks.length,
+      total: totalMatching,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.max(1, Math.ceil(totalMatching / (limitNum || 1))),
+      stats: {
+        totalTitles: overallStats.totalTitles,
+        totalCopies: overallStats.totalCopies,
+        availableCopies: overallStats.availableCopies
+      },
       books: formattedBooks
     });
   } catch (err) {
@@ -363,35 +399,8 @@ async function deleteBook(req, res) {
   }
 }
 
-const BASELINE_CATEGORIES = [
-  { name: 'Computer Science & Engineering', code: 'CSE', description: 'Computing systems, algorithms, architectures & software' },
-  { name: 'Mechanical Engineering', code: 'MECH', description: 'Thermal, dynamics, robotics and mechanics' },
-  { name: 'Electronics & Communication', code: 'ECE', description: 'Signals, VLSI design, communications and circuits' },
-  { name: 'Artificial Intelligence & Data Science', code: 'AIDS', description: 'Machine learning, neural networks & statistical modeling' },
-  { name: 'Management & Business Studies', code: 'MGMT', description: 'Administration, finance, human resource & marketing' },
-  { name: 'General Reference', code: 'GEN', description: 'Handbooks, dictionaries, general science & encyclopedias' }
-];
-
-let categoriesSeeded = false;
-async function ensureSeedCategories() {
-  if (categoriesSeeded) return;
-  try {
-    const count = await Category.countDocuments();
-    if (count === 0) {
-      for (const cat of BASELINE_CATEGORIES) {
-        await Category.create(cat);
-      }
-      console.log('📚 Seeded baseline academic categories in database');
-    }
-    categoriesSeeded = true;
-  } catch (err) {
-    console.error('Error ensuring categories in DB:', err.message);
-  }
-}
-
 async function getCategories(req, res) {
   try {
-    await ensureSeedCategories();
     const categories = await Category.find().sort({ name: 1 }).lean();
     res.json({ total: categories.length, categories });
   } catch (err) {
@@ -472,6 +481,5 @@ module.exports = {
   createCategory,
   updateCategory,
   deleteCategory,
-  ensureSeedCategories,
   getLatestSerialEndpoint
 };

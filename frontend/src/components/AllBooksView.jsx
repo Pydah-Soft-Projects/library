@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   BookOpen, Search, Plus, ArrowLeftRight, Edit3, 
-  Trash2, MapPin, List, LayoutGrid, X, Check
+  Trash2, MapPin, List, LayoutGrid, X, Check,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 
 export default function AllBooksView({
@@ -20,6 +21,15 @@ export default function AllBooksView({
   const [editingBook, setEditingBook] = useState(null);
   const [viewingCopiesBook, setViewingCopiesBook] = useState(null);
 
+  // Dynamic Pagination State (dynamically changeable count)
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset to first section whenever search filter, category, tab, or page size changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, selectedCategory, activeTab, pageSize]);
+
   const [dynamicCategories, setDynamicCategories] = useState(['All']);
 
   useEffect(() => {
@@ -35,9 +45,20 @@ export default function AllBooksView({
     }
   }, [books]);
 
-  const totalCopies = books.reduce((sum, b) => sum + (b.total || 0), 0);
-  const availableCopies = books.reduce((sum, b) => sum + (b.available || 0), 0);
-  const circulatingCopies = totalCopies - availableCopies;
+  // Fast single-pass summary calculation with useMemo
+  const { totalCopies, availableCopies } = useMemo(() => {
+    let tot = 0;
+    let avail = 0;
+    for (let i = 0; i < books.length; i++) {
+      const b = books[i];
+      const t = b.total !== undefined ? Number(b.total) : (Number(b.total_copies) || 1);
+      tot += t;
+      avail += b.available !== undefined && b.available !== null ? Number(b.available) : t;
+    }
+    return { totalCopies: tot, availableCopies: avail };
+  }, [books]);
+
+  const circulatingCopies = Math.max(0, totalCopies - availableCopies);
 
   const formatAccessionRange = (acc) => {
     if (!acc) return '—';
@@ -48,73 +69,97 @@ export default function AllBooksView({
     return str;
   };
 
-  // Filtered books for Total Books catalog tab
-  const filteredBooks = books.filter(b => {
-    const matchCat = selectedCategory === 'All' || b.category === selectedCategory;
+  // Filtered books for Total Books catalog tab (memoized to load by parts without re-filtering)
+  const filteredBooks = useMemo(() => {
     const q = searchTerm.toLowerCase().trim();
-    const matchQuery = !searchTerm ||
-      (b.title && b.title.toLowerCase().includes(q)) ||
-      (b.author && b.author.toLowerCase().includes(q)) ||
-      (b.accession && b.accession.toLowerCase().includes(q)) ||
-      (b.barcode && b.barcode.toLowerCase().includes(q)) ||
-      (b.shelf && b.shelf.toLowerCase().includes(q)) ||
-      (b.isbn && b.isbn.toLowerCase().includes(q)) ||
-      (Array.isArray(b.copies_detail) && b.copies_detail.some(c => 
-        (c.accession && String(c.accession).toLowerCase().includes(q)) ||
-        (c.serial_no && String(c.serial_no).toLowerCase().includes(q)) ||
-        (c.barcode && String(c.barcode).toLowerCase().includes(q)) ||
-        String(c.copy_number) === q
-      ));
+    return books.filter(b => {
+      const matchCat = selectedCategory === 'All' || b.category === selectedCategory;
+      const matchQuery = !q ||
+        (b.title && b.title.toLowerCase().includes(q)) ||
+        (b.author && b.author.toLowerCase().includes(q)) ||
+        (b.accession && b.accession.toLowerCase().includes(q)) ||
+        (b.barcode && b.barcode.toLowerCase().includes(q)) ||
+        (b.shelf && b.shelf.toLowerCase().includes(q)) ||
+        (b.isbn && b.isbn.toLowerCase().includes(q));
 
-    return matchCat && matchQuery;
-  });
+      return matchCat && matchQuery;
+    });
+  }, [books, selectedCategory, searchTerm]);
 
-  // Flat list of all available copies across the library for "Available Copies" tab
-  const availableCopiesList = books.filter(b => (b.available || 0) > 0).flatMap(book => {
-    const matchCat = selectedCategory === 'All' || book.category === selectedCategory;
-    if (!matchCat) return [];
+  // Flat list of available copies (only computed when activeTab === 'available' for fast loading)
+  const availableCopiesList = useMemo(() => {
+    if (activeTab !== 'available') return [];
 
-    const copiesCount = book.total !== undefined ? book.total : (book.total_copies || 1);
-    const availCount = book.available !== undefined ? book.available : copiesCount;
-
-    const copiesList = Array.isArray(book.copies_detail) && book.copies_detail.length > 0
-      ? book.copies_detail
-      : Array.from({ length: copiesCount }, (_, i) => ({
-          copy_number: i + 1,
-          serial_no: `SN${(book.category_code || (book.category || 'GEN').slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '')}${i + 1}`,
-          accession: `${book.accession || 'AC'}${i + 1}`,
-          barcode: `${book.barcode || 'BC'}${i + 1}`,
-          status: i < availCount ? 'Available' : 'Issued'
-        }));
-
-    return copiesList
-      .filter(cp => cp.status === 'Available' || !cp.status)
-      .map((cp, idx) => ({
-        id: `${book.id || book._id}-cp-${cp.copy_number || idx + 1}`,
-        book,
-        copy_number: cp.copy_number || idx + 1,
-        accession: cp.accession || String(cp.copy_number || idx + 1),
-        barcode: cp.barcode || cp.serial_no || '',
-        serial_no: cp.serial_no || '',
-        shelf: book.shelf || 'Central Stack',
-        category: book.category || 'General',
-        title: book.title,
-        author: book.author || 'Institutional Author'
-      }));
-  }).filter(item => {
-    if (!searchTerm) return true;
     const q = searchTerm.toLowerCase().trim();
-    return (
-      item.title.toLowerCase().includes(q) ||
-      item.author.toLowerCase().includes(q) ||
-      String(item.accession).toLowerCase().includes(q) ||
-      String(item.barcode).toLowerCase().includes(q) ||
-      String(item.serial_no).toLowerCase().includes(q) ||
-      String(item.shelf).toLowerCase().includes(q) ||
-      String(item.category).toLowerCase().includes(q) ||
-      String(item.copy_number) === q
-    );
-  });
+    const result = [];
+
+    for (let i = 0; i < books.length; i++) {
+      const book = books[i];
+      const availCount = book.available !== undefined ? Number(book.available) : (Number(book.total) || 1);
+      if (availCount <= 0) continue;
+
+      const matchCat = selectedCategory === 'All' || book.category === selectedCategory;
+      if (!matchCat) continue;
+
+      const copiesCount = book.total !== undefined ? Number(book.total) : (Number(book.total_copies) || 1);
+
+      const copiesList = Array.isArray(book.copies_detail) && book.copies_detail.length > 0
+        ? book.copies_detail
+        : Array.from({ length: copiesCount }, (_, idx) => ({
+            copy_number: idx + 1,
+            serial_no: `SN${(book.category_code || (book.category || 'GEN').slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '')}${idx + 1}`,
+            accession: `${book.accession || 'AC'}${idx + 1}`,
+            barcode: `${book.barcode || 'BC'}${idx + 1}`,
+            status: idx < availCount ? 'Available' : 'Issued'
+          }));
+
+      for (let j = 0; j < copiesList.length; j++) {
+        const cp = copiesList[j];
+        if (cp.status !== 'Available' && cp.status) continue;
+
+        const item = {
+          id: `${book.id || book._id}-cp-${cp.copy_number || j + 1}`,
+          book,
+          copy_number: cp.copy_number || j + 1,
+          accession: cp.accession || String(cp.copy_number || j + 1),
+          barcode: cp.barcode || cp.serial_no || '',
+          serial_no: cp.serial_no || '',
+          shelf: book.shelf || 'Central Stack',
+          category: book.category || 'General',
+          title: book.title,
+          author: book.author || 'Institutional Author'
+        };
+
+        if (q) {
+          const matches =
+            item.title.toLowerCase().includes(q) ||
+            item.author.toLowerCase().includes(q) ||
+            String(item.accession).toLowerCase().includes(q) ||
+            String(item.barcode).toLowerCase().includes(q) ||
+            String(item.serial_no).toLowerCase().includes(q) ||
+            String(item.shelf).toLowerCase().includes(q) ||
+            String(item.category).toLowerCase().includes(q) ||
+            String(item.copy_number) === q;
+          if (!matches) continue;
+        }
+
+        result.push(item);
+      }
+    }
+
+    return result;
+  }, [books, selectedCategory, searchTerm, activeTab]);
+
+  // Dynamic Pagination Calculations
+  const currentItemsCount = activeTab === 'available' ? availableCopiesList.length : filteredBooks.length;
+  const totalPages = Math.max(1, Math.ceil(currentItemsCount / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startItem = currentItemsCount === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const endItem = Math.min(safePage * pageSize, currentItemsCount);
+
+  // Paginated Slices for Loading by Section
+  const paginatedAvailableCopies = availableCopiesList.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const paginatedTotalBooks = filteredBooks.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const handleEditSubmit = (e) => {
     e.preventDefault();
@@ -227,7 +272,27 @@ export default function AllBooksView({
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {/* Dynamic Page Size Selector in Toolbar */}
+            <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+              <span className="hidden sm:inline">Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="px-2 py-1.5 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                title="Change items per page"
+              >
+                <option value={10}>10</option>
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
             <div className="flex items-center border border-zinc-200 rounded-lg p-0.5">
               <button
                 onClick={() => setViewMode('table')}
@@ -299,7 +364,7 @@ export default function AllBooksView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
-                {availableCopiesList.map((cp, idx) => (
+                {paginatedAvailableCopies.map((cp, idx) => (
                   <tr key={`${cp.id || idx}`} className="hover:bg-zinc-50/70 transition-colors">
                     <td className="py-3 px-3">
                       <div className="font-semibold text-zinc-900">{cp.title}</div>
@@ -352,7 +417,7 @@ export default function AllBooksView({
           </div>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-            {availableCopiesList.map((cp, idx) => (
+            {paginatedAvailableCopies.map((cp, idx) => (
               <div
                 key={`${cp.id || idx}`}
                 className="p-4 border border-zinc-200 rounded-lg hover:border-zinc-400 transition-colors flex flex-col justify-between"
@@ -421,7 +486,7 @@ export default function AllBooksView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
-                {filteredBooks.map((book, idx) => {
+                {paginatedTotalBooks.map((book, idx) => {
                   const copiesCount = book.total !== undefined ? book.total : (book.total_copies || 1);
                   const availCount = book.available !== undefined ? book.available : copiesCount;
                   const isAvailable = availCount > 0;
@@ -544,7 +609,7 @@ export default function AllBooksView({
           </div>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-            {filteredBooks.map((book, idx) => {
+            {paginatedTotalBooks.map((book, idx) => {
               const isAvailable = (book.available || 0) > 0;
               return (
                 <div
@@ -593,6 +658,116 @@ export default function AllBooksView({
             })}
           </div>
         )
+      )}
+
+      {/* Dynamic Pagination Bar (Load by Sections & Changable Count) */}
+      {currentItemsCount > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 pb-2 border-t border-zinc-200 text-xs">
+          {/* Left: Item range count & dynamic rows per page selector */}
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-zinc-500 font-medium">
+              Showing <strong className="text-zinc-900 font-semibold">{startItem}</strong> to <strong className="text-zinc-900 font-semibold">{endItem}</strong> of <strong className="text-zinc-900 font-semibold">{currentItemsCount}</strong> {activeTab === 'available' ? 'Available Copies' : 'Books'}
+            </span>
+
+            <div className="flex items-center gap-1.5 text-zinc-500">
+              <span>Section size:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="px-2 py-1 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                title="Change items per page"
+              >
+                <option value={10}>10 per page</option>
+                <option value={15}>15 per page</option>
+                <option value={25}>25 per page</option>
+                <option value={50}>50 per page</option>
+                <option value={100}>100 per page</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Right: Page navigation buttons & Page X of Y */}
+          <div className="flex items-center gap-1.5 self-end sm:self-auto">
+            <span className="text-zinc-500 mr-1.5 text-[11px]">
+              Page <strong className="text-zinc-800">{safePage}</strong> of <strong className="text-zinc-800">{totalPages}</strong>
+            </span>
+
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage(1)}
+              className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+              title="First Section"
+            >
+              <ChevronsLeft className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+              title="Previous Section"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Numerical Section / Page Buttons */}
+            <div className="flex items-center gap-1">
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === totalPages || (p >= safePage - 2 && p <= safePage + 2))
+                .reduce((acc, p, idx, arr) => {
+                  if (idx > 0 && p - arr[idx - 1] > 1) {
+                    acc.push(`ellipsis-${p}`);
+                  }
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((item) => {
+                  if (typeof item === 'string') {
+                    return <span key={item} className="px-1 text-zinc-400 select-none">...</span>;
+                  }
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => setCurrentPage(item)}
+                      className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                        item === safePage
+                          ? 'bg-zinc-900 text-white shadow-2xs'
+                          : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                      }`}
+                    >
+                      {item}
+                    </button>
+                  );
+                })}
+            </div>
+
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+              title="Next Section"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage(totalPages)}
+              className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+              title="Last Section"
+            >
+              <ChevronsRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Edit Book Modal */}

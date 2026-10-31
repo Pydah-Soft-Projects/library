@@ -37,9 +37,8 @@ if (mongoUri) {
   mongoose.connect(mongoUri)
     .then(async () => {
       console.log('🍃 Successfully connected to MongoDB Atlas database');
-      // Ensure baseline roles, categories, and settings exist in database
+      // Ensure baseline roles and settings exist in database
       await roleController.ensureSeedRoles();
-      await bookController.ensureSeedCategories();
       const existingSettings = await Setting.findOne({ key: 'system_settings' });
       if (!existingSettings) {
         await Setting.create(settingsController.DEFAULT_SETTINGS);

@@ -289,8 +289,8 @@ export default function App() {
           const loadedBooks = data.books.map(b => {
             const copyCount = b.total !== undefined ? b.total : (b.total_copies || 1);
             const catCode = (b.category_code || (b.category || 'GEN').slice(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'GEN';
-            const baseAcc = String(b.accession || b.accession_no || `AC${b.id}`).replace(/[\s\-_]/g, '');
-            const baseBar = String(b.barcode || `BC${b.id}`).replace(/[\s\-_]/g, '');
+            const cleanAcc = String(b.accession || b.accession_no || `AC${b.id}`).trim();
+            const cleanBar = String(b.barcode || `BC${b.id}`).trim();
 
             // Ensure copies_detail has valid serial numbers and copies count
             let copiesDetail = [];
@@ -298,17 +298,17 @@ export default function App() {
               copiesDetail = b.copies_detail.map((cp, idx) => ({
                 ...cp,
                 copy_number: cp.copy_number || idx + 1,
-                serial_no: String(cp.serial_no || `SN${catCode}${idx + 1}`).replace(/[\s\-_]/g, ''),
-                accession: String(cp.accession || `${baseAcc}${idx + 1}`).replace(/[\s\-_]/g, ''),
-                barcode: String(cp.barcode || `${baseBar}${idx + 1}`).replace(/[\s\-_]/g, ''),
+                serial_no: String(cp.serial_no || `SN${catCode}${idx + 1}`).trim(),
+                accession: String(cp.accession || `${cleanAcc.split('-')[0].trim()}${idx + 1}`).trim(),
+                barcode: String(cp.barcode || `${cleanBar}${idx + 1}`).trim(),
                 status: cp.status || 'Available'
               }));
             } else {
               copiesDetail = Array.from({ length: copyCount }, (_, idx) => ({
                 copy_number: idx + 1,
                 serial_no: `SN${catCode}${idx + 1}`,
-                accession: `${baseAcc}${idx + 1}`,
-                barcode: `${baseBar}${idx + 1}`,
+                accession: `${cleanAcc.split('-')[0].trim()}${idx + 1}`,
+                barcode: `${cleanBar}${idx + 1}`,
                 status: idx < (b.available !== undefined ? b.available : copyCount) ? 'Available' : 'Issued'
               }));
             }
@@ -321,8 +321,8 @@ export default function App() {
               isbn: b.isbn,
               category: b.category,
               category_code: catCode,
-              accession: baseAcc,
-              barcode: baseBar,
+              accession: cleanAcc,
+              barcode: cleanBar,
               shelf: b.shelf || b.shelf_location || 'Central Stack',
               total: copyCount,
               available: b.available !== undefined ? b.available : (b.available_copies !== undefined ? b.available_copies : copyCount),
