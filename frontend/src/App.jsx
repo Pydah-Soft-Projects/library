@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import LoginView from './components/LoginView';
+import LandingView from './components/LandingView';
 import JwtModal from './components/JwtModal';
 
 // 6 Core Minimalist Page Views
@@ -43,6 +44,7 @@ export default function App() {
   }, []);
 
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('lm_jwt_token') || null);
+  const [unauthView, setUnauthView] = useState(() => (window.location.pathname === '/login' ? 'login' : 'landing'));
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_jwt_user');
@@ -112,11 +114,12 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Synchronize URL pathname without '#' and route unauthenticated users cleanly to /login
+  // Synchronize URL pathname without '#' and handle unauthenticated navigation (landing / login)
   useEffect(() => {
     if (!authToken) {
-      if (window.location.pathname !== '/login' || window.location.hash) {
-        window.history.replaceState(null, '', '/login');
+      const targetPath = unauthView === 'login' ? '/login' : '/';
+      if (window.location.pathname !== targetPath || window.location.hash) {
+        window.history.replaceState(null, '', targetPath);
       }
     } else if (currentTab) {
       const targetPath = `/${currentTab}`;
@@ -127,13 +130,17 @@ export default function App() {
         localStorage.setItem('lm_current_tab', currentTab);
       } catch {}
     }
-  }, [authToken, currentTab]);
+  }, [authToken, currentTab, unauthView]);
 
   // Listen to browser Back and Forward navigation without hash
   useEffect(() => {
     const handlePopState = () => {
       if (!authToken) {
-        window.history.replaceState(null, '', '/login');
+        if (window.location.pathname === '/login') {
+          setUnauthView('login');
+        } else {
+          setUnauthView('landing');
+        }
         return;
       }
       const matched = getCleanPath(window.location.pathname);
@@ -144,7 +151,7 @@ export default function App() {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [authToken, currentTab]);
+  }, [authToken, currentTab, unauthView]);
 
   const [currentStudentId, setCurrentStudentId] = useState(() => {
     try {
@@ -493,9 +500,10 @@ export default function App() {
   const handleLogout = (showToast = true) => {
     setAuthToken(null);
     setCurrentUser(null);
+    setUnauthView('landing');
     localStorage.removeItem('lm_jwt_token');
     localStorage.removeItem('lm_jwt_user');
-    window.history.replaceState(null, '', '/login');
+    window.history.replaceState(null, '', '/');
     if (showToast) {
       addToast('Logged out of institutional session. JWT invalidated.', 'info');
     }
@@ -1254,14 +1262,27 @@ export default function App() {
     addAuditLog(`FINE WAIVER: ₹${Number(fine.amount).toFixed(2)} waived for ${fine.patronName}. Reason: ${reason}.`);
   };
 
-  // Unauthenticated Patron / Staff: Render JWT Login Screen
+  // Unauthenticated Patron / Staff: Render Landing Page or JWT Login Screen
   if (!authToken) {
     return (
       <div>
-        <LoginView
-          onLoginSuccess={handleLoginSuccess}
-          onToast={addToast}
-        />
+        {unauthView === 'login' ? (
+          <LoginView
+            onLoginSuccess={handleLoginSuccess}
+            onToast={addToast}
+            onBack={() => {
+              setUnauthView('landing');
+              window.history.pushState(null, '', '/');
+            }}
+          />
+        ) : (
+          <LandingView
+            onNavigateToLogin={() => {
+              setUnauthView('login');
+              window.history.pushState(null, '', '/login');
+            }}
+          />
+        )}
         {/* Floating System Notifications */}
         <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-auto">
           {toasts.map(t => (

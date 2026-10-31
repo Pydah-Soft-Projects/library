@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { 
-  BookOpen, Lock, Mail, ArrowRight, Eye, EyeOff, 
+  BookOpen, Lock, Mail, ArrowRight, ArrowLeft, Eye, EyeOff, 
   AlertCircle, ShieldCheck
 } from 'lucide-react';
 
-export default function LoginView({ onLoginSuccess, onToast }) {
+export default function LoginView({ onLoginSuccess, onToast, onBack }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -55,6 +55,16 @@ export default function LoginView({ onLoginSuccess, onToast }) {
     <div className="min-h-screen bg-zinc-50 flex flex-col items-center justify-center p-4 sm:p-6 select-none font-sans">
       <div className="w-full max-w-md">
         <div className="bg-white border border-zinc-200/90 rounded-2xl shadow-sm p-8 sm:p-10 space-y-6">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-900 font-medium transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Portal Home</span>
+            </button>
+          )}
           {/* Header */}
           <div className="text-center space-y-2">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-zinc-900 text-white shadow-xs mb-1">
