@@ -22,6 +22,23 @@ const INITIAL_FINES = [];
 const INITIAL_STUDENTS = [];
 const INITIAL_RESERVATIONS = [];
 
+// Early URL cleanup: purge any hash and route unauthenticated users directly to /login
+if (typeof window !== 'undefined') {
+  try {
+    const token = localStorage.getItem('lm_jwt_token');
+    if (!token) {
+      if (window.location.pathname !== '/login' || window.location.hash) {
+        window.history.replaceState(null, '', '/login');
+      }
+    } else if (window.location.hash) {
+      const cleanSegment = window.location.hash.replace(/^#\/?/, '').split('/')[0].toLowerCase().trim();
+      const VALID = ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings'];
+      const target = cleanSegment && VALID.includes(cleanSegment) ? `/${cleanSegment}` : '/dashboard';
+      window.history.replaceState(null, '', target);
+    }
+  } catch {}
+}
+
 export default function App() {
   // Enforce Clean Standard Theme and purge any legacy mock data from LocalStorage
   useEffect(() => {

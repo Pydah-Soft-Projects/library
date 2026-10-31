@@ -499,21 +499,17 @@ export default function BookIssuesReturnsView({
     setIsReturnDropdownOpen(false);
 
     // Filter active loans for this student
+    const stPin = String(st.pin_no || st.rollNo || '').toLowerCase().trim();
+    const stName = String(st.name || '').toLowerCase().trim();
     const studentLoans = loans.filter(l => 
       l.status !== 'Returned' && (
-        (l.patronId && (
-          l.patronId.toLowerCase() === String(st.pin_no || '').toLowerCase() || 
-          l.patronId.toLowerCase() === String(st.rollNo || '').toLowerCase()
-        )) ||
-        (l.patronName && l.patronName.toLowerCase() === st.name.toLowerCase())
+        (stPin && String(l.patronId || '').toLowerCase().trim() === stPin) ||
+        (stName && String(l.patronName || '').toLowerCase().trim() === stName)
       )
     );
 
     if (studentLoans.length === 1) {
       setSelectedLoanForReturn(studentLoans[0]);
-    } else if (studentLoans.length === 0) {
-      setSelectedLoanForReturn(null);
-      if (onToast) onToast(`No active issued books found for ${st.name}.`, 'info');
     } else {
       setSelectedLoanForReturn(null);
     }
@@ -833,15 +829,39 @@ export default function BookIssuesReturnsView({
 
   // Filtered active loans for Return Desk list
   const filteredReturnLoans = activeLoans.filter(l => {
+    // 1. If a student is selected in the Return Desk, filter by their PIN / Roll No or Name
+    if (selectedReturnStudent) {
+      const pin = String(selectedReturnStudent.pin_no || selectedReturnStudent.rollNo || '').toLowerCase().trim();
+      const name = String(selectedReturnStudent.name || '').toLowerCase().trim();
+      const loanPin = String(l.patronId || '').toLowerCase().trim();
+      const loanName = String(l.patronName || '').toLowerCase().trim();
+      const matchesPin = pin && loanPin && (loanPin === pin || loanPin.includes(pin) || pin.includes(loanPin));
+      const matchesName = name && loanName && (loanName === name || loanName.includes(name) || name.includes(loanName));
+      return matchesPin || matchesName;
+    }
+
     if (!returnInput) return true;
-    const q = returnInput.toLowerCase().trim();
+    const raw = returnInput.toLowerCase().trim();
+    const pinMatch = raw.match(/\(([^)]+)\)/);
+    const extractedPin = pinMatch ? pinMatch[1].toLowerCase().trim() : null;
+    const cleanName = raw.replace(/\([^)]+\)/, '').toLowerCase().trim();
+
+    const bookTitle = (l.bookTitle || '').toLowerCase();
+    const patronName = (l.patronName || '').toLowerCase();
+    const patronId = (l.patronId || '').toLowerCase();
+    const accession = (l.accession || '').toLowerCase();
+    const bookBarcode = (l.bookBarcode || '').toLowerCase();
+    const department = (l.department || '').toLowerCase();
+
     return (
-      (l.bookTitle && l.bookTitle.toLowerCase().includes(q)) ||
-      (l.patronName && l.patronName.toLowerCase().includes(q)) ||
-      (l.patronId && l.patronId.toLowerCase().includes(q)) ||
-      (l.accession && l.accession.toLowerCase().includes(q)) ||
-      (l.bookBarcode && l.bookBarcode.toLowerCase().includes(q)) ||
-      (l.department && l.department.toLowerCase().includes(q))
+      bookTitle.includes(raw) ||
+      patronName.includes(raw) ||
+      (cleanName && patronName.includes(cleanName)) ||
+      patronId.includes(raw) ||
+      (extractedPin && patronId.includes(extractedPin)) ||
+      accession.includes(raw) ||
+      bookBarcode.includes(raw) ||
+      department.includes(raw)
     );
   });
 
@@ -920,14 +940,29 @@ export default function BookIssuesReturnsView({
     if (loanStatusFilter === 'history' && l.status !== 'Returned') return false;
 
     if (!loanSearchTerm) return true;
-    const q = loanSearchTerm.toLowerCase();
+    const raw = loanSearchTerm.toLowerCase().trim();
+    const pinMatch = raw.match(/\(([^)]+)\)/);
+    const extractedPin = pinMatch ? pinMatch[1].toLowerCase().trim() : null;
+    const cleanName = raw.replace(/\([^)]+\)/, '').toLowerCase().trim();
+
+    const bookTitle = (l.bookTitle || '').toLowerCase();
+    const patronName = (l.patronName || '').toLowerCase();
+    const patronId = (l.patronId || '').toLowerCase();
+    const accession = (l.accession || '').toLowerCase();
+    const bookBarcode = (l.bookBarcode || '').toLowerCase();
+    const department = (l.department || '').toLowerCase();
+    const status = (l.status || '').toLowerCase();
+
     return (
-      (l.bookTitle && l.bookTitle.toLowerCase().includes(q)) ||
-      (l.patronName && l.patronName.toLowerCase().includes(q)) ||
-      (l.patronId && l.patronId.toLowerCase().includes(q)) ||
-      (l.accession && l.accession.toLowerCase().includes(q)) ||
-      (l.department && l.department.toLowerCase().includes(q)) ||
-      (l.status && l.status.toLowerCase().includes(q))
+      bookTitle.includes(raw) ||
+      patronName.includes(raw) ||
+      (cleanName && patronName.includes(cleanName)) ||
+      patronId.includes(raw) ||
+      (extractedPin && patronId.includes(extractedPin)) ||
+      accession.includes(raw) ||
+      bookBarcode.includes(raw) ||
+      department.includes(raw) ||
+      status.includes(raw)
     );
   });
 
@@ -1600,7 +1635,7 @@ export default function BookIssuesReturnsView({
                           <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Book Title</span>
                           <span className="font-bold text-sm text-zinc-900 block mt-0.5">{selectedLoanForReturn.bookTitle}</span>
                           <span className="font-mono text-[11px] text-blue-700 font-semibold mt-0.5 block">
-                            Accession: #{selectedLoanForReturn.accession || selectedLoanForReturn.bookBarcode}
+                            Book No: #{getSingleBookNumber(selectedLoanForReturn.accession || selectedLoanForReturn.bookBarcode)}
                           </span>
                         </div>
                         <div className="flex items-center gap-4">
@@ -1748,7 +1783,7 @@ export default function BookIssuesReturnsView({
                                 <td className="py-3 px-3">
                                   <div className="font-bold text-zinc-900">{loan.bookTitle}</div>
                                   <span className="font-mono text-[10px] text-zinc-500 font-medium">
-                                    Acc: {loan.accession || loan.bookBarcode}
+                                    Book No: #{getSingleBookNumber(loan.accession || loan.bookBarcode)}
                                   </span>
                                 </td>
                                 <td className="py-3 px-3">

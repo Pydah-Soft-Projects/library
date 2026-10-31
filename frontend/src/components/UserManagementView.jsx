@@ -1146,11 +1146,13 @@ export default function UserManagementView({ onToast }) {
                   className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-zinc-900 font-medium"
                 >
                   <option value="" disabled>-- Select a Library Role --</option>
-                  {roles.map(r => (
-                    <option key={r.id || r.name} value={r.name}>
-                      {r.name} {r.is_system ? '(Full System Administration)' : `(${r.page_privileges?.length || 0} privileges)`}
-                    </option>
-                  ))}
+                  {roles
+                    .filter(r => !r.is_system && (r.name || '').toLowerCase() !== 'superadmin' && String(r.id).toLowerCase() !== 'superadmin')
+                    .map(r => (
+                      <option key={r.id || r.name} value={r.name}>
+                        {r.name} ({r.page_privileges?.length || 0} privileges)
+                      </option>
+                    ))}
                 </select>
 
                 {/* Selected Role Description Card */}
@@ -1560,11 +1562,13 @@ export default function UserManagementView({ onToast }) {
                   onChange={(e) => setChangeRoleUser({ ...changeRoleUser, newRole: e.target.value })}
                   className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-zinc-900"
                 >
-                  {roles.map(r => (
-                    <option key={r.id || r.name} value={r.name}>
-                      {r.name} ({r.page_privileges?.length || 0} pages allowed)
-                    </option>
-                  ))}
+                  {roles
+                    .filter(r => !r.is_system && (r.name || '').toLowerCase() !== 'superadmin' && String(r.id).toLowerCase() !== 'superadmin')
+                    .map(r => (
+                      <option key={r.id || r.name} value={r.name}>
+                        {r.name} ({r.page_privileges?.length || 0} pages allowed)
+                      </option>
+                    ))}
                 </select>
               </div>
 
