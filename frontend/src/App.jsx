@@ -66,15 +66,30 @@ export default function App() {
     return 'Superadmin';
   });
 
+  const VALID_TABS = ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings'];
+
+  const getCleanPath = (pathname) => {
+    const segment = (pathname || '').replace(/^\/+/, '').split('/')[0].toLowerCase().trim();
+    return VALID_TABS.includes(segment) ? segment : null;
+  };
+
   const getInitialTab = () => {
     try {
-      const hash = window.location.hash.replace(/^#\/?/, '').trim();
-      const validTabs = ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings'];
-      if (hash && validTabs.includes(hash)) {
-        return hash;
+      // Clear any legacy hash from previous sessions
+      if (window.location.hash) {
+        const hashSegment = window.location.hash.replace(/^#\/?/, '').split('/')[0].toLowerCase().trim();
+        if (VALID_TABS.includes(hashSegment)) {
+          window.history.replaceState(null, '', `/${hashSegment}`);
+          return hashSegment;
+        }
       }
+
+      // Check current pathname (e.g. /dashboard or /user_management)
+      const pathSegment = getCleanPath(window.location.pathname);
+      if (pathSegment) return pathSegment;
+
       const savedTab = localStorage.getItem('lm_current_tab');
-      if (savedTab && validTabs.includes(savedTab)) {
+      if (savedTab && VALID_TABS.includes(savedTab)) {
         return savedTab;
       }
     } catch {}
@@ -97,31 +112,39 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Synchronize currentTab with URL Hash and LocalStorage for seamless browser reload support
+  // Synchronize URL pathname without '#' and route unauthenticated users cleanly to /login
   useEffect(() => {
-    if (currentTab) {
-      if (window.location.hash !== `#${currentTab}`) {
-        window.location.hash = `#${currentTab}`;
+    if (!authToken) {
+      if (window.location.pathname !== '/login' || window.location.hash) {
+        window.history.replaceState(null, '', '/login');
+      }
+    } else if (currentTab) {
+      const targetPath = `/${currentTab}`;
+      if (window.location.pathname !== targetPath || window.location.hash) {
+        window.history.replaceState(null, '', targetPath);
       }
       try {
         localStorage.setItem('lm_current_tab', currentTab);
       } catch {}
     }
-  }, [currentTab]);
+  }, [authToken, currentTab]);
 
-  // Listen to browser navigation (Back, Forward, Direct URL hash changes)
+  // Listen to browser Back and Forward navigation without hash
   useEffect(() => {
-    const handleHashChange = () => {
-      const hash = window.location.hash.replace(/^#\/?/, '').trim();
-      const validTabs = ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings'];
-      if (hash && validTabs.includes(hash) && hash !== currentTab) {
-        setCurrentTab(hash);
+    const handlePopState = () => {
+      if (!authToken) {
+        window.history.replaceState(null, '', '/login');
+        return;
+      }
+      const matched = getCleanPath(window.location.pathname);
+      if (matched && matched !== currentTab) {
+        setCurrentTab(matched);
       }
     };
 
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [currentTab]);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [authToken, currentTab]);
 
   const [currentStudentId, setCurrentStudentId] = useState(() => {
     try {
@@ -163,7 +186,19 @@ export default function App() {
   const [loans, setLoans] = useState(() => {
     try {
       const saved = localStorage.getItem('lm_loans');
-      return saved ? JSON.parse(saved) : [];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const seen = new Set();
+          return parsed.filter(l => {
+            const key = String(l.id || l._id || `${l.accession}-${l.patronId}-${l.issueDateFormatted || l.issue_date}`);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        }
+      }
+      return [];
     } catch {
       return [];
     }
@@ -302,8 +337,15 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         if (data && Array.isArray(data.loans)) {
-          setLoans(data.loans);
-          try { localStorage.setItem('lm_loans', JSON.stringify(data.loans)); } catch {}
+          const seen = new Set();
+          const deduped = data.loans.filter(l => {
+            const key = String(l.id || l._id || `${l.accession}-${l.patronId}-${l.issueDateFormatted || l.issue_date}`);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          setLoans(deduped);
+          try { localStorage.setItem('lm_loans', JSON.stringify(deduped)); } catch {}
         }
       })
       .catch(() => {});
@@ -439,6 +481,10 @@ export default function App() {
       });
     }
 
+    const nextTab = currentTab && VALID_TABS.includes(currentTab) ? currentTab : 'dashboard';
+    setCurrentTab(nextTab);
+    window.history.replaceState(null, '', `/${nextTab}`);
+
     addToast(`Welcome, ${user.full_name}! Signed in successfully. JWT verified.`, 'success');
     addAuditLog(`JWT AUTH: "${user.full_name}" (${user.patron_id || user.email}) authenticated. Role: ${user.role}.`);
   };
@@ -449,6 +495,7 @@ export default function App() {
     setCurrentUser(null);
     localStorage.removeItem('lm_jwt_token');
     localStorage.removeItem('lm_jwt_user');
+    window.history.replaceState(null, '', '/login');
     if (showToast) {
       addToast('Logged out of institutional session. JWT invalidated.', 'info');
     }
@@ -475,30 +522,48 @@ export default function App() {
   }, []);
 
   // Student specific data with reliable fallback to currentUser
-  const currentStudent = students.find(s => 
-    s.id === currentStudentId || 
-    s.rollNo === currentStudentId ||
-    (currentUser && (s.email === currentUser.email || s.name === currentUser.full_name))
-  ) || (currentUser ? {
-    id: currentUser.patron_id || `STU-${currentUser.id}`,
+  const currentStudent = (Array.isArray(students) && students.find(s => 
+    s && (
+      s.id === currentStudentId || 
+      s.rollNo === currentStudentId ||
+      (currentUser && (s.email === currentUser.email || s.name === currentUser.full_name))
+    )
+  )) || (currentUser ? {
+    id: currentUser.patron_id || `EMP-${currentUser.id}`,
     name: currentUser.full_name,
-    rollNo: currentUser.patron_id || `STU-${currentUser.id}`,
+    rollNo: currentUser.patron_id || `EMP-${currentUser.id}`,
     email: currentUser.email,
-    department: currentUser.department || 'Computer Science & Engineering',
+    department: currentUser.department || 'Library Administration',
     status: 'Active',
     borrowedCount: 0,
     fineBalance: 0
-  } : students[0]);
+  } : (Array.isArray(students) && students[0]) || {
+    id: 'GUEST',
+    name: 'Guest Patron',
+    rollNo: 'GUEST',
+    email: 'guest@pydah.edu.in',
+    department: 'General',
+    status: 'Active',
+    borrowedCount: 0,
+    fineBalance: 0
+  });
 
-  const studentLoans = loans.filter(l => l.patronId === currentStudent.id || l.patronId === currentStudent.rollNo);
-  const studentFines = fines.filter(f => f.patronId === currentStudent.id || f.patronId === currentStudent.rollNo);
-  const studentHasOverdue = studentLoans.some(l => l.status === 'Overdue') || studentFines.some(f => f.status === 'Unpaid');
-  const studentFineAmount = studentFines.filter(f => f.status === 'Unpaid').reduce((sum, f) => sum + Number(f.amount), 0);
+  const studentIdVal = currentStudent?.id || '';
+  const studentRollVal = currentStudent?.rollNo || studentIdVal;
+
+  const studentLoans = (Array.isArray(loans) && studentIdVal) 
+    ? loans.filter(l => l && (l.patronId === studentIdVal || l.patronId === studentRollVal)) 
+    : [];
+  const studentFines = (Array.isArray(fines) && studentIdVal) 
+    ? fines.filter(f => f && (f.patronId === studentIdVal || f.patronId === studentRollVal)) 
+    : [];
+  const studentHasOverdue = studentLoans.some(l => l && l.status === 'Overdue') || studentFines.some(f => f && f.status === 'Unpaid');
+  const studentFineAmount = studentFines.filter(f => f && f.status === 'Unpaid').reduce((sum, f) => sum + Number(f.amount || 0), 0);
 
   // Overall counts for badges
-  const activeLoansCount = loans.filter(l => l.status !== 'Returned').length;
-  const overdueFinesCount = loans.filter(l => l.status === 'Overdue').length;
-  const totalPendingFines = fines.filter(f => f.status === 'Unpaid').reduce((sum, f) => sum + Number(f.amount), 0);
+  const activeLoansCount = Array.isArray(loans) ? loans.filter(l => l && l.status !== 'Returned').length : 0;
+  const overdueFinesCount = Array.isArray(loans) ? loans.filter(l => l && l.status === 'Overdue').length : 0;
+  const totalPendingFines = Array.isArray(fines) ? fines.filter(f => f && f.status === 'Unpaid').reduce((sum, f) => sum + Number(f.amount || 0), 0) : 0;
 
   // Compute effective permissions for currently authenticated user / persona
   const isSuperadmin = (currentRole || '').toLowerCase() === 'superadmin' || 
@@ -597,6 +662,7 @@ export default function App() {
     const finalPatronName = patron?.name || `Patron #${finalPatronId}`;
     const finalDept = patron?.department || 'General';
 
+    let backendLoan = null;
     try {
       const res = await fetch('/api/circulation/issue', {
         method: 'POST',
@@ -618,7 +684,7 @@ export default function App() {
         return;
       }
       if (data.loan) {
-        setLoans(prev => [data.loan, ...prev.filter(l => l.id !== data.loan.id)]);
+        backendLoan = data.loan;
       }
     } catch {
       // Local sync fallback
@@ -650,8 +716,22 @@ export default function App() {
       dueDateStr = due.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     }
 
-    const newLoan = {
-      id: Date.now(),
+    // Build the resolved loan - strictly ONE object, no duplicate!
+    const resolvedLoan = backendLoan ? {
+      ...backendLoan,
+      id: backendLoan.id || backendLoan._id || `loan-${Date.now()}`,
+      bookTitle: backendLoan.bookTitle || targetBook.title,
+      bookBarcode: backendLoan.bookBarcode || targetBook.barcode || targetBook.accession,
+      accession: backendLoan.accession || targetBook.accession,
+      patronName: backendLoan.patronName || finalPatronName,
+      patronId: backendLoan.patronId || finalPatronId,
+      department: backendLoan.department || finalDept,
+      issueDateFormatted: backendLoan.issueDateFormatted || new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+      dueDateFormatted: backendLoan.dueDateFormatted || dueDateStr,
+      status: backendLoan.status || 'Borrowed',
+      renewalsCount: backendLoan.renewalsCount || 0
+    } : {
+      id: `loan-${Date.now()}`,
       bookTitle: targetBook.title,
       bookBarcode: targetBook.barcode || targetBook.accession,
       accession: targetBook.accession,
@@ -664,7 +744,21 @@ export default function App() {
       renewalsCount: 0
     };
 
-    setLoans(prev => [newLoan, ...prev]);
+    // Single atomic update with strict deduplication
+    setLoans(prev => {
+      const filtered = prev.filter(l => {
+        if (resolvedLoan.id && String(l.id) === String(resolvedLoan.id)) return false;
+        if (resolvedLoan._id && String(l._id || l.id) === String(resolvedLoan._id)) return false;
+        if (resolvedLoan.accession && l.accession === resolvedLoan.accession && l.status !== 'Returned') {
+          return false;
+        }
+        return true;
+      });
+      const updated = [resolvedLoan, ...filtered];
+      try { localStorage.setItem('lm_loans', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+
     addToast(`Book "${targetBook.title}" issued to ${finalPatronName}! Due Date: ${dueDateStr}`, 'success');
     addAuditLog(`ISSUE: "${targetBook.title}" [${targetBook.accession}] issued to ${finalPatronName} (${finalPatronId}). Due Date: ${dueDateStr}`);
   };
@@ -694,6 +788,7 @@ export default function App() {
 
     const barcodeForApi = targetLoan.bookBarcode || targetLoan.accession || targetBook?.barcode || targetBook?.accession || barcodeOrId;
 
+    let apiReturnDate = null;
     try {
       const res = await fetch('/api/circulation/return', {
         method: 'POST',
@@ -701,11 +796,14 @@ export default function App() {
           'Content-Type': 'application/json',
           ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
         },
-        body: JSON.stringify({ barcode: barcodeForApi })
+        body: JSON.stringify({ barcode: barcodeForApi, borrow_id: targetLoan._id || targetLoan.id })
       });
       const data = await res.json();
       if (data.fine) {
         setFines(prev => [data.fine, ...prev]);
+      }
+      if (data.loan?.returnDate) {
+        apiReturnDate = data.loan.returnDate;
       }
     } catch {
       // Local sync fallback
@@ -730,24 +828,33 @@ export default function App() {
       return s;
     }));
 
-    const now = new Date();
+    const now = apiReturnDate ? new Date(apiReturnDate) : new Date();
     const retDateFormatted = now.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
-    setLoans(prev => prev.map(l => {
-      if (l.id === targetLoan.id) {
-        return { 
-          ...l, 
-          status: 'Returned',
-          return_date: now.toISOString(),
-          returnDate: now.toISOString(),
-          returnDateFormatted: retDateFormatted
-        };
-      }
-      return l;
-    }));
+    setLoans(prev => {
+      const updated = prev.map(l => {
+        const isMatch = (l.id && targetLoan.id && String(l.id) === String(targetLoan.id)) ||
+                        (l._id && targetLoan._id && String(l._id) === String(targetLoan._id)) ||
+                        (l.id && targetLoan._id && String(l.id) === String(targetLoan._id)) ||
+                        (l._id && targetLoan.id && String(l._id) === String(targetLoan.id)) ||
+                        (l.accession && l.accession === targetLoan.accession && l.status !== 'Returned');
+        if (isMatch) {
+          return { 
+            ...l, 
+            status: 'Returned',
+            return_date: now.toISOString(),
+            returnDate: now.toISOString(),
+            returnDateFormatted: retDateFormatted
+          };
+        }
+        return l;
+      });
+      try { localStorage.setItem('lm_loans', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
 
     addToast(`Book "${targetLoan.bookTitle}" returned to stock. Reshelve at: ${targetBook?.shelf || 'Central Stack'}`, 'success');
-    addAuditLog(`RETURN: "${targetLoan.bookTitle}" returned by ${targetLoan.patronName}. Copy restored to shelf.`);
+    addAuditLog(`RETURN: "${targetLoan.bookTitle}" returned by ${targetLoan.patronName} on ${retDateFormatted}. Copy restored to shelf.`);
   };
 
   // Real Loan Renewal (+15 Days Extension)
@@ -889,7 +996,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           full_name: newStudent.name,
-          email: newStudent.email || `${newStudent.rollNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@college.edu.in`,
+          email: newStudent.email || '',
           password: 'student123',
           department: newStudent.department,
           phone: newStudent.phone,

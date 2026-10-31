@@ -4,8 +4,19 @@ const db = require('../config/db');
 const User = require('../models/User');
 const HrmsUserRole = require('../models/HrmsUserRole');
 const Role = require('../models/Role');
+const hrmsService = require('../services/hrmsService');
+const { PAGE_PRIVILEGES } = require('./roleController');
 const { logAudit } = require('../services/auditService');
 const { JWT_SECRET } = require('../middleware/authMiddleware');
+
+const ALL_PAGE_PRIVILEGES = [
+  'dashboard',
+  'book_creation',
+  'all_books',
+  'book_issues_returns',
+  'user_management',
+  'settings'
+];
 
 async function login(req, res) {
   try {
@@ -14,185 +25,123 @@ async function login(req, res) {
     const loginInput = rawInput.toLowerCase();
 
     if (!loginInput) {
-      return res.status(400).json({ error: 'Institutional Email, Username, or Employee / Student ID is required.' });
+      return res.status(400).json({ error: 'HRMS Employee ID, Username, or Institutional Email is required.' });
     }
 
     if (!password) {
       return res.status(400).json({ error: 'Password is required to authenticate.' });
     }
 
-    // 1. Query user from MongoDB by Email, Username, or Patron ID
-    let user = await User.findOne({
-      $or: [
-        { email: loginInput },
-        { username: loginInput },
-        { username: rawInput },
-        { patron_id: loginInput.toUpperCase() },
-        { patron_id: rawInput },
-        { patron_id: loginInput }
-      ]
-    });
+    let authenticatedUser = null;
+    let authSource = null;
 
-    // 2. If not found in User, check if user is mapped via HRMS role assignment
-    if (!user) {
-      let hrmsAssignment = await HrmsUserRole.findOne({
+    // 1. Direct HRMS Live Authentication
+    const hrmsAuth = await hrmsService.verifyHrmsCredentials(rawInput, password).catch(() => ({ success: false }));
+    if (hrmsAuth && hrmsAuth.success) {
+      const emp = hrmsAuth.employee;
+
+      // Resolve Library Page Privileges & Assigned Role from HrmsUserRole
+      const assignment = await HrmsUserRole.findOne({ emp_no: emp.emp_no }).lean();
+      let roleName = assignment?.role_name;
+      let permissions = assignment?.page_privileges;
+
+      if (!roleName) {
+        const defaultRole = await Role.findOne({ is_system: false }).sort({ created_at: 1 }).lean();
+        roleName = defaultRole?.name || 'Librarian';
+        permissions = defaultRole?.permissions || ['dashboard', 'all_books'];
+      }
+
+      if (!permissions || permissions.length === 0) {
+        const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${roleName}$`, 'i') } }).lean();
+        permissions = roleDoc?.permissions || ['dashboard', 'all_books'];
+      }
+
+      authenticatedUser = {
+        id: emp.emp_no,
+        emp_no: emp.emp_no,
+        username: emp.emp_no,
+        full_name: emp.name,
+        email: emp.email,
+        role: roleName,
+        department: emp.department,
+        division: emp.division,
+        status: 'Active',
+        permissions,
+        source: 'HRMS Live Direct Authentication'
+      };
+      authSource = 'HRMS';
+    }
+
+    // 2. Local Database Authentication (e.g. system administrator / superadmin with bcrypt password)
+    if (!authenticatedUser) {
+      const dbUser = await User.findOne({
         $or: [
-          { emp_no: rawInput },
-          { emp_no: loginInput },
-          { emp_no: { $regex: new RegExp(`^${rawInput}$`, 'i') } }
+          { username: loginInput },
+          { username: rawInput },
+          { email: loginInput },
+          { patron_id: rawInput },
+          { patron_id: loginInput.toUpperCase() }
         ]
       });
 
-      if (!hrmsAssignment && loginInput.includes('@')) {
-        const empPrefix = loginInput.split('@')[0];
-        hrmsAssignment = await HrmsUserRole.findOne({ emp_no: empPrefix });
-      }
-
-      if (hrmsAssignment) {
-        const roleName = hrmsAssignment.role_name || 'Faculty / Scholar';
-        const isSuperadmin = roleName.toLowerCase() === 'superadmin';
-        const hashedPassword = await bcrypt.hash(password || 'superadmin123', 10);
-
-        user = await User.findOneAndUpdate(
-          { $or: [{ username: hrmsAssignment.emp_no }, { patron_id: hrmsAssignment.emp_no }] },
-          {
-            username: hrmsAssignment.emp_no,
-            full_name: hrmsAssignment.employee_name || `Employee #${hrmsAssignment.emp_no}`,
-            email: `${hrmsAssignment.emp_no.toLowerCase()}@pydah.edu.in`,
-            role: roleName,
-            role_id: isSuperadmin ? 1 : 2,
-            patron_id: hrmsAssignment.emp_no,
-            department: hrmsAssignment.department || 'General',
-            status: 'Active',
-            permissions: hrmsAssignment.page_privileges || ['dashboard', 'all_books'],
-            password: hashedPassword
-          },
-          { upsert: true, new: true }
-        );
+      if (dbUser && dbUser.password) {
+        const isPasswordMatch = await bcrypt.compare(password, dbUser.password);
+        if (isPasswordMatch) {
+          const isSuperadmin = (dbUser.role || '').toLowerCase().trim() === 'superadmin';
+          authenticatedUser = {
+            id: dbUser._id.toString(),
+            emp_no: dbUser.patron_id || dbUser.username,
+            username: dbUser.username,
+            full_name: dbUser.full_name,
+            email: dbUser.email,
+            role: dbUser.role || (isSuperadmin ? 'Superadmin' : 'Librarian'),
+            department: dbUser.department || 'Governance & Administration',
+            division: 'Administration',
+            status: dbUser.status || 'Active',
+            permissions: isSuperadmin ? ALL_PAGE_PRIVILEGES : (dbUser.permissions || ['dashboard', 'all_books']),
+            source: 'Database User'
+          };
+          authSource = 'Database';
+        }
       }
     }
 
-    if (!user) {
-      return res.status(401).json({ 
-        error: `No institutional account found matching "${rawInput}". Please verify credentials.` 
-      });
+    if (!authenticatedUser) {
+      return res.status(401).json({ error: 'Invalid credentials. Please verify your username / employee ID and password.' });
     }
 
-    // 3. Cryptographic Password Verification
-    let isMatch = false;
-    if (user.password) {
-      isMatch = await bcrypt.compare(password, user.password);
-    }
-
-    // Allow standard institutional passwords, employee ID, or admin passwords
-    if (!isMatch && (
-      ((user.username === 'superadmin' || user.role === 'Superadmin') && (password === 'superadmin123' || password === 'admin123')) ||
-      password === user.username ||
-      password === user.patron_id ||
-      password === 'superadmin123' ||
-      password === 'admin123' ||
-      password === 'pydah123' ||
-      password === 'password123'
-    )) {
-      isMatch = true;
-    }
-
-    if (!isMatch) {
-      return res.status(401).json({ 
-        error: 'Invalid password. Please check your credentials.' 
-      });
-    }
-
-    if (user.status === 'Frozen') {
-      return res.status(403).json({
-        error: 'Account is frozen due to administrative hold or overdue policy violations.'
-      });
-    }
-
-    // 3. Resolve Dynamic Role & Permissions from MongoDB Atlas
-    const roleDoc = await Role.findOne({
-      $or: [
-        { name: { $regex: new RegExp(`^${user.role || 'Student'}$`, 'i') } },
-        { name: user.role }
-      ]
-    }).lean();
-
-    const roleName = user.role || roleDoc?.name || 'Student';
-    const rolePermissions = roleDoc?.permissions || ['dashboard', 'all_books'];
-    const userPermissions = (user.permissions && user.permissions.length > 0)
-      ? user.permissions
-      : rolePermissions;
-
-    let effectivePermissions = new Set(userPermissions);
-    if (user.patron_id) {
-      const hrms = await HrmsUserRole.findOne({ emp_no: user.patron_id }).lean();
-      if (hrms && hrms.individual_overrides) {
-        const overrides = hrms.individual_overrides instanceof Map 
-          ? Object.fromEntries(hrms.individual_overrides)
-          : hrms.individual_overrides;
-        Object.entries(overrides).forEach(([key, val]) => {
-          if (val) effectivePermissions.add(key);
-          else effectivePermissions.delete(key);
-        });
-      }
-    }
-
-    const permissionsList = Array.from(effectivePermissions);
-
-    // 4. Construct Standard JWT Payload
+    // 3. Construct Standard JWT Payload
+    const isSuperadmin = authenticatedUser.role === 'Superadmin';
     const tokenPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-      fullName: user.full_name,
-      role: roleName,
-      roleId: user.role_id,
-      patronId: user.patron_id || null,
-      department: user.department || null,
-      permissions: permissionsList
+      userId: authenticatedUser.id,
+      emp_no: authenticatedUser.emp_no,
+      email: authenticatedUser.email,
+      fullName: authenticatedUser.full_name,
+      role: authenticatedUser.role,
+      roleId: isSuperadmin ? 1 : 2,
+      patronId: authenticatedUser.emp_no,
+      department: authenticatedUser.department,
+      division: authenticatedUser.division,
+      permissions: authenticatedUser.permissions
     };
 
-    // 5. Sign Cryptographic JWT (24-hour expiration)
-    const token = jwt.sign(tokenPayload, JWT_SECRET, {
-      expiresIn: '24h',
-      algorithm: 'HS256',
-      issuer: 'CampusLibraryAuthService',
-      subject: user._id.toString()
-    });
-
-    const decoded = jwt.decode(token);
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
 
     logAudit({
-      actor_id: user._id.toString(),
-      action_key: 'auth.jwt_login',
-      target_resource: 'SECURITY',
-      payload: { 
-        email: user.email, 
-        role: roleName, 
-        patron_id: user.patron_id,
-        expires_at: new Date(decoded.exp * 1000).toISOString()
-      }
+      actor_id: authenticatedUser.emp_no,
+      action_key: `auth.login.${authSource.toLowerCase()}`,
+      target_resource: `AUTH:${authenticatedUser.emp_no}`,
+      payload: { name: authenticatedUser.full_name, department: authenticatedUser.department, role: authenticatedUser.role }
     });
 
     res.json({
-      message: 'JWT Authentication successful',
+      message: `Authenticated successfully as ${authenticatedUser.full_name}`,
       token,
       token_type: 'Bearer',
-      expires_in: 86400, // 24 hours
-      expires_at: new Date(decoded.exp * 1000).toISOString(),
-      user: {
-        id: user._id.toString(),
-        full_name: user.full_name,
-        email: user.email,
-        role: roleName,
-        role_id: user.role_id,
-        patron_id: user.patron_id || null,
-        department: user.department || null,
-        status: user.status || 'Active',
-        permissions: permissionsList
-      }
+      user: authenticatedUser
     });
   } catch (err) {
-    console.error('Login error:', err);
+    console.error('Error in authentication login:', err);
     res.status(500).json({ error: 'Server authentication error occurred. Please try again.' });
   }
 }
@@ -223,27 +172,57 @@ async function me(req, res) {
     }
 
     try {
-      const user = await User.findById(decoded.userId);
-      if (!user) {
-        return res.status(404).json({ error: 'User account not found' });
+      const empNo = decoded.emp_no || decoded.userId;
+
+      // 1. Check if user is in database (like root superadmin)
+      const dbUser = await User.findOne({
+        $or: [
+          { username: String(empNo).toLowerCase() },
+          { patron_id: String(empNo) },
+          { _id: (empNo && empNo.length === 24) ? empNo : null }
+        ]
+      }).lean();
+
+      if (dbUser) {
+        const isSuperadmin = (dbUser.role || '').toLowerCase().trim() === 'superadmin';
+        return res.json({
+          user: {
+            id: dbUser._id.toString(),
+            emp_no: dbUser.patron_id || dbUser.username,
+            username: dbUser.username,
+            full_name: dbUser.full_name,
+            email: dbUser.email,
+            role: dbUser.role,
+            role_id: isSuperadmin ? 1 : 2,
+            department: dbUser.department || 'Governance & Administration',
+            division: 'Administration',
+            status: dbUser.status || 'Active',
+            permissions: isSuperadmin ? ALL_PAGE_PRIVILEGES : (dbUser.permissions || ['dashboard', 'all_books']),
+            source: 'Database User'
+          }
+        });
       }
+
+      // 2. Fetch live employee details directly from HRMS
+      const hrmsEmp = await hrmsService.getEmployeeByEmpNo(empNo).catch(() => null);
+      const assignment = await HrmsUserRole.findOne({ emp_no: String(empNo) }).lean();
+
+      const roleName = assignment?.role_name || decoded.role || 'Librarian';
+      const permissions = assignment?.page_privileges || decoded.permissions || ['dashboard', 'all_books'];
 
       res.json({
         user: {
-          id: user._id.toString(),
-          full_name: user.full_name,
-          email: user.email,
-          role: user.role || 'Student',
-          role_id: user.role_id,
-          patron_id: user.patron_id || null,
-          department: user.department || null,
-          status: user.status || 'Active',
-          permissions: decoded.permissions || user.permissions || ['dashboard', 'all_books']
-        },
-        jwt_claims: {
-          issuer: decoded.iss,
-          issued_at: new Date(decoded.iat * 1000).toISOString(),
-          expires_at: new Date(decoded.exp * 1000).toISOString()
+          id: empNo,
+          emp_no: empNo,
+          username: empNo,
+          full_name: hrmsEmp?.name || decoded.fullName || `Employee #${empNo}`,
+          email: hrmsEmp?.email || decoded.email || '',
+          department: hrmsEmp?.department || decoded.department || 'General',
+          division: hrmsEmp?.division || decoded.division || '',
+          role: roleName,
+          status: 'Active',
+          permissions,
+          source: 'HRMS Live'
         }
       });
     } catch (dbErr) {
@@ -268,189 +247,44 @@ function refresh(req, res) {
 
     const newTokenPayload = {
       userId: decoded.userId,
+      emp_no: decoded.emp_no || decoded.userId,
       email: decoded.email,
       fullName: decoded.fullName,
       role: decoded.role,
       roleId: decoded.roleId,
       patronId: decoded.patronId,
       department: decoded.department,
+      division: decoded.division,
       permissions: decoded.permissions
     };
 
-    const newToken = jwt.sign(newTokenPayload, JWT_SECRET, {
-      expiresIn: '24h',
-      algorithm: 'HS256',
-      issuer: 'CampusLibraryAuthService',
-      subject: String(decoded.userId)
-    });
+    const newToken = jwt.sign(newTokenPayload, JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
       message: 'Token refreshed successfully',
       token: newToken,
-      token_type: 'Bearer',
-      expires_in: 86400
+      token_type: 'Bearer'
     });
   });
 }
 
 async function register(req, res) {
-  try {
-    const { full_name, email, password, department, role, phone, patron_id } = req.body || {};
-
-    if (!full_name || !full_name.trim()) {
-      return res.status(400).json({ error: 'Full name is required to register.' });
-    }
-    if (!email || !email.trim()) {
-      return res.status(400).json({ error: 'Valid email address is required.' });
-    }
-    if (!password || password.length < 4) {
-      return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
-    const existing = await User.findOne({ email: cleanEmail });
-    if (existing) {
-      return res.status(409).json({ error: 'An institutional account with this email already exists. Please sign in.' });
-    }
-
-    // Resolve dynamic role from MongoDB Atlas
-    const roleName = role ? role.trim() : 'Student';
-    const roleDoc = await Role.findOne({
-      name: { $regex: new RegExp(`^${roleName}$`, 'i') }
-    }).lean();
-
-    const finalRoleName = roleDoc ? roleDoc.name : roleName;
-    const basePermissions = roleDoc?.permissions && roleDoc.permissions.length > 0
-      ? roleDoc.permissions
-      : ['dashboard', 'all_books'];
-
-    // Generate unique patron ID (Roll Number) if not provided
-    const randomCode = Math.floor(1000 + Math.random() * 9000);
-    const generatedPatronId = patron_id && patron_id.trim() 
-      ? patron_id.trim().toUpperCase() 
-      : `STU-${new Date().getFullYear()}-${randomCode}`;
-
-    // Hash password with bcrypt
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newUser = await User.create({
-      username: cleanEmail.split('@')[0],
-      full_name: full_name.trim(),
-      email: cleanEmail,
-      password: hashedPassword,
-      role: finalRoleName,
-      role_id: finalRoleName.toLowerCase() === 'superadmin' ? 1 : 4,
-      phone: phone ? phone.trim() : '',
-      patron_id: generatedPatronId,
-      department: department ? department.trim() : 'Computer Science & Engineering',
-      status: 'Active',
-      permissions: basePermissions
-    });
-
-    // Sign real JWT token for immediate login
-    const tokenPayload = {
-      userId: newUser._id.toString(),
-      email: newUser.email,
-      fullName: newUser.full_name,
-      role: roleObj.name,
-      roleId: newUser.role_id,
-      patronId: newUser.patron_id,
-      department: newUser.department,
-      permissions: basePermissions
-    };
-
-    const token = jwt.sign(tokenPayload, JWT_SECRET, {
-      expiresIn: '24h',
-      algorithm: 'HS256',
-      issuer: 'CampusLibraryAuthService',
-      subject: newUser._id.toString()
-    });
-
-    logAudit({
-      actor_id: newUser._id.toString(),
-      action_key: 'auth.new_member_registration',
-      target_resource: 'PATRONS',
-      payload: {
-        email: newUser.email,
-        full_name: newUser.full_name,
-        patron_id: newUser.patron_id,
-        role: roleObj.name,
-        department: newUser.department
-      }
-    });
-
-    res.status(201).json({
-      message: 'Member registered successfully! Welcome to the Central Campus Library.',
-      token,
-      token_type: 'Bearer',
-      user: {
-        id: newUser._id.toString(),
-        full_name: newUser.full_name,
-        email: newUser.email,
-        role: roleObj.name,
-        role_id: newUser.role_id,
-        patron_id: newUser.patron_id,
-        department: newUser.department,
-        status: newUser.status,
-        permissions: basePermissions
-      }
-    });
-  } catch (err) {
-    console.error('Registration error:', err);
-    res.status(500).json({ error: 'Failed to create user account. Please check details and try again.' });
-  }
+  res.status(400).json({
+    error: 'Direct user registration is disabled. Users are automatically verified and managed live from institutional HRMS.'
+  });
 }
 
 async function resetPassword(req, res) {
-  try {
-    const { identifier, newPassword } = req.body || {};
-    const loginInput = (identifier || '').trim().toLowerCase();
-
-    if (!loginInput) {
-      return res.status(400).json({ error: 'Institutional Email, Username, or Roll Number is required.' });
-    }
-    if (!newPassword || newPassword.length < 4) {
-      return res.status(400).json({ error: 'New password must be at least 4 characters long.' });
-    }
-
-    const user = await User.findOne({
-      $or: [
-        { email: loginInput },
-        { username: loginInput },
-        { patron_id: loginInput.toUpperCase() },
-        { patron_id: loginInput }
-      ]
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: `No registered account found matching "${loginInput}".` });
-    }
-
-    user.password = await bcrypt.hash(newPassword, 10);
-    await user.save();
-
-    logAudit({
-      actor_id: user._id.toString(),
-      action_key: 'auth.password_reset',
-      target_resource: 'SECURITY',
-      payload: { email: user.email, patron_id: user.patron_id }
-    });
-
-    res.json({
-      message: `Password updated successfully for ${user.full_name}. You may now log in with your new credentials.`,
-      email: user.email
-    });
-  } catch (err) {
-    console.error('Reset password error:', err);
-    res.status(500).json({ error: 'Unable to reset password. Please try again.' });
-  }
+  res.status(400).json({
+    error: 'Password reset must be performed directly in your institutional HRMS employee portal.'
+  });
 }
 
 module.exports = {
   login,
-  register,
-  resetPassword,
   verify,
   me,
-  refresh
+  refresh,
+  register,
+  resetPassword
 };

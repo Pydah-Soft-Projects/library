@@ -78,7 +78,6 @@ export default function BookCreationView({
   const [excelSearchTerm, setExcelSearchTerm] = useState('');
   const [defaultUploadCategory, setDefaultUploadCategory] = useState('');
   const [defaultUploadShelf, setDefaultUploadShelf] = useState('Central Stack');
-  const [defaultUploadCopies, setDefaultUploadCopies] = useState(1);
   const [isImporting, setIsImporting] = useState(false);
   const [importCompleted, setImportCompleted] = useState(false);
   const [importCount, setImportCount] = useState(0);
@@ -214,10 +213,61 @@ export default function BookCreationView({
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-        if (!rawRows || rawRows.length === 0) {
+        // 1. Convert sheet to 2D row grid
+        const rawGrid = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+        if (!rawGrid || rawGrid.length === 0) {
           if (onToast) onToast('The uploaded spreadsheet contains no data rows.', 'danger');
+          setIsParsingExcel(false);
+          return;
+        }
+
+        // 2. Intelligent Header Detection: scan first 25 rows to identify the real column headers
+        const HEADER_KEYWORDS = [
+          'title', 'titlename', 'booktitle', 'book_title', 'name',
+          'accession', 'accessionno', 'accession_no', 'accno',
+          'author', 'authorname', 'author_name',
+          'publisher', 'publishername', 'publisher_name',
+          'isbn', 'category', 'categoryname', 'edition', 'pages', 'barcode', 'serialno'
+        ];
+
+        let bestRowIdx = 0;
+        let maxScore = 0;
+        for (let i = 0; i < Math.min(25, rawGrid.length); i++) {
+          const row = rawGrid[i];
+          if (!Array.isArray(row) || row.length === 0) continue;
+          let score = 0;
+          row.forEach(cell => {
+            const clean = String(cell || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (HEADER_KEYWORDS.some(kw => clean.includes(kw))) score++;
+          });
+          if (score > maxScore) {
+            maxScore = score;
+            bestRowIdx = i;
+          }
+        }
+
+        const headers = Array.isArray(rawGrid[bestRowIdx])
+          ? rawGrid[bestRowIdx].map(h => String(h || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
+          : [];
+
+        // 3. Convert grid rows into mapped key-value rows
+        const rawRows = [];
+        for (let i = bestRowIdx + 1; i < rawGrid.length; i++) {
+          const row = rawGrid[i];
+          if (!Array.isArray(row) || row.length === 0) continue;
+          const map = {};
+          headers.forEach((h, colIdx) => {
+            if (h) {
+              map[h] = row[colIdx] !== undefined ? String(row[colIdx]).trim() : '';
+            }
+          });
+          rawRows.push(map);
+        }
+
+        if (rawRows.length === 0) {
+          if (onToast) onToast('No readable book records found below header in spreadsheet.', 'danger');
           setIsParsingExcel(false);
           return;
         }
@@ -227,15 +277,15 @@ export default function BookCreationView({
         let skippedRowsCount = 0;
         let runningSerial = getHighestSerialNumber(books);
 
-        rawRows.forEach((row, idx) => {
-          // Normalize row keys by stripping non-alphanumeric characters and lowercasing
-          const map = {};
-          Object.keys(row).forEach(k => {
-            const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            map[cleanKey] = row[k];
-          });
+        let lastSeenTitle = '';
+        let lastSeenTitleId = '';
+        let lastSeenAuthor = '';
+        let lastSeenPublisher = '';
+        let lastSeenCategory = '';
+        let lastSeenShelf = '';
 
-          const titleVal = (
+        rawRows.forEach((map, idx) => {
+          let titleVal = (
             map['titlename'] ||
             map['title'] ||
             map['booktitle'] ||
@@ -246,24 +296,44 @@ export default function BookCreationView({
           const accVal = (
             map['accessionno'] ||
             map['accession'] ||
+            map['accno'] ||
             map['serialno'] ||
             ''
           ).toString().trim();
 
-          const titleId = (map['titleid'] || '').toString().trim();
+          let titleId = (map['titleid'] || '').toString().trim();
 
-          // Gracefully skip metadata/status rows (like "Status :"), header repeats, or empty rows
-          if (!titleVal && (!accVal || accVal.toLowerCase().includes('status'))) {
+          // Gracefully skip metadata/status/total footer rows (like "Status :", "Total :"), header repeats, or empty rows
+          const lowerTitle = titleVal.toLowerCase();
+          const lowerAcc = accVal.toLowerCase();
+          if (
+            lowerTitle.includes('status :') || 
+            lowerTitle === 'status' || 
+            lowerAcc.includes('status') ||
+            lowerTitle.includes('total :') ||
+            lowerTitle === 'total' ||
+            lowerAcc.includes('total') ||
+            lowerTitle.startsWith('report') ||
+            lowerAcc.startsWith('report')
+          ) {
             skippedRowsCount++;
             return;
           }
-          if (titleVal.toLowerCase().includes('status :') || accVal.toLowerCase().includes('status')) {
-            skippedRowsCount++;
-            return;
+
+          // Fallback to previous row's title if accession exists but title is empty
+          if (!titleVal && accVal && lastSeenTitle) {
+            titleVal = lastSeenTitle;
+            if (!titleId) titleId = lastSeenTitleId;
           }
+
           if (!titleVal && !accVal) {
             skippedRowsCount++;
             return;
+          }
+
+          if (titleVal) {
+            lastSeenTitle = titleVal;
+            lastSeenTitleId = titleId;
           }
 
           // Track numeric accession for continuing serial numbers
@@ -938,23 +1008,61 @@ export default function BookCreationView({
           {/* Parsed Books Review & Settings Panel */}
           {parsedBooks.length > 0 && (
             <div className="bg-white border border-zinc-200 rounded-2xl shadow-sm p-6 space-y-5">
-              {/* Summary Metrics & Actions Strip */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-100">
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <span className="px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold rounded-lg text-xs">
-                    {parseSummary?.totalTitles || parsedBooks.length} Book Titles Ready
+              {/* Prominent Total Books & Total Copies Metrics Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-slate-50 border border-slate-200/80 rounded-2xl">
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Total Books</span>
+                  </div>
+                  <div className="text-xl font-bold text-slate-900 mt-1 font-mono">
+                    {(parseSummary?.totalTitles || parsedBooks.length).toLocaleString()}
+                  </div>
+                  <span className="text-[10px] text-slate-400">Unique catalog titles</span>
+                </div>
+
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Total Copies</span>
+                  </div>
+                  <div className="text-xl font-bold text-emerald-700 mt-1 font-mono">
+                    {(parseSummary?.totalCopies || parsedBooks.reduce((s, b) => s + b.total, 0)).toLocaleString()}
+                  </div>
+                  <span className="text-[10px] text-slate-400">Total physical holdings</span>
+                </div>
+
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <Barcode className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Accession Range</span>
+                  </div>
+                  <div className="text-sm font-bold text-slate-800 mt-1.5 font-mono truncate" title="Accession range">
+                    {parsedBooks[0]?.copies_detail?.[0]?.accession 
+                      ? `#${parsedBooks[0].copies_detail[0].accession} – #${parsedBooks[parsedBooks.length - 1]?.copies_detail?.[parsedBooks[parsedBooks.length - 1]?.copies_detail?.length - 1]?.accession || parsedBooks[parsedBooks.length - 1]?.accession}` 
+                      : 'Sequential Acc'}
+                  </div>
+                  <span className="text-[10px] text-slate-400">Barcode serial mappings</span>
+                </div>
+
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
+                    <span>File Import Status</span>
+                  </div>
+                  <div className="text-xs font-bold text-teal-800 mt-1.5 truncate" title={uploadedFileName}>
+                    {uploadedFileName || 'Ready to Catalog'}
+                  </div>
+                  <span className="text-[10px] text-teal-600 font-medium">
+                    {(parseSummary?.skippedRows || 0) > 0 ? `${parseSummary.skippedRows} footer/status rows skipped` : 'Ready for accessioning'}
                   </span>
-                  <span className="px-3 py-1 bg-blue-50 border border-blue-200 text-blue-800 font-bold rounded-lg text-xs">
-                    {parseSummary?.totalCopies || parsedBooks.reduce((s, b) => s + b.total, 0)} Physical Copies
-                  </span>
-                  {(parseSummary?.skippedRows || 0) > 0 && (
-                    <span className="px-2.5 py-1 bg-zinc-100 border border-zinc-200 text-zinc-600 rounded-lg text-xs">
-                      {parseSummary.skippedRows} Status/Header Rows Skipped
-                    </span>
-                  )}
-                  <span className="text-xs text-zinc-400">
-                    File: <strong className="text-zinc-700">{uploadedFileName}</strong>
-                  </span>
+                </div>
+              </div>
+
+              {/* Action Buttons Strip */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-100">
+                <div className="text-xs text-zinc-500">
+                  Review the catalog holdings below. Click <strong>Confirm & Import</strong> to add all books and physical copies to the database.
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -965,7 +1073,7 @@ export default function BookCreationView({
                       setUploadedFileName('');
                       setParseSummary(null);
                     }}
-                    className="px-3.5 py-2 border border-zinc-200 hover:bg-zinc-100 text-zinc-600 rounded-xl text-xs font-semibold transition-colors"
+                    className="px-3.5 py-2 border border-zinc-200 hover:bg-zinc-100 text-zinc-600 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
                   >
                     Clear File
                   </button>
@@ -973,7 +1081,7 @@ export default function BookCreationView({
                     type="button"
                     disabled={isImporting || parsedBooks.length === 0}
                     onClick={handleConfirmImport}
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-sm shadow-emerald-600/20"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-sm shadow-emerald-600/20 cursor-pointer"
                   >
                     {isImporting ? (
                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -985,8 +1093,8 @@ export default function BookCreationView({
                 </div>
               </div>
 
-              {/* Upload Defaults Configuration Strip (Category optional) */}
-              <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-xl grid sm:grid-cols-3 gap-4 text-xs">
+              {/* Upload Defaults Configuration Strip (2 Columns: Default Category and Default Shelf) */}
+              <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-xl grid sm:grid-cols-2 gap-4 text-xs">
                 <div>
                   <label className="block font-medium text-zinc-700 mb-1">
                     Fallback Category (Optional)
@@ -1019,47 +1127,61 @@ export default function BookCreationView({
                   />
                   <span className="text-[10px] text-zinc-400 mt-0.5 block">Used when Alm WS.ID/Shelf is empty</span>
                 </div>
+              </div>
 
-                <div>
-                  <label className="block font-medium text-zinc-700 mb-1">
-                    Default Copies per Book
-                  </label>
+              {/* Search Filter in Parsed Rows with live counts */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
                   <input
-                    type="number"
-                    min="1"
-                    value={defaultUploadCopies}
-                    onChange={(e) => setDefaultUploadCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-emerald-600"
+                    type="text"
+                    value={excelSearchTerm}
+                    onChange={(e) => setExcelSearchTerm(e.target.value)}
+                    placeholder="Filter parsed books by title, author, accession, or category..."
+                    className="w-full pl-9 pr-4 py-2 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:outline-none focus:border-emerald-600"
                   />
-                  <span className="text-[10px] text-zinc-400 mt-0.5 block">Used when Copies/Qty is omitted</span>
+                </div>
+                <div className="text-xs text-slate-600 shrink-0 font-medium">
+                  Showing <strong>{parsedBooks.filter(b => {
+                    if (!excelSearchTerm) return true;
+                    const q = excelSearchTerm.toLowerCase();
+                    return (
+                      b.title.toLowerCase().includes(q) ||
+                      b.author.toLowerCase().includes(q) ||
+                      b.accession.toLowerCase().includes(q) ||
+                      b.category.toLowerCase().includes(q) ||
+                      (b.titleId && b.titleId.toLowerCase().includes(q))
+                    );
+                  }).length.toLocaleString()}</strong> of <strong>{parsedBooks.length.toLocaleString()}</strong> titles
+                  <span className="text-slate-400 ml-1.5">
+                    ({parsedBooks.filter(b => {
+                      if (!excelSearchTerm) return true;
+                      const q = excelSearchTerm.toLowerCase();
+                      return (
+                        b.title.toLowerCase().includes(q) ||
+                        b.author.toLowerCase().includes(q) ||
+                        b.accession.toLowerCase().includes(q) ||
+                        b.category.toLowerCase().includes(q) ||
+                        (b.titleId && b.titleId.toLowerCase().includes(q))
+                      );
+                    }).reduce((sum, b) => sum + b.total, 0).toLocaleString()} copies)
+                  </span>
                 </div>
               </div>
 
-              {/* Search Filter in Parsed Rows */}
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
-                <input
-                  type="text"
-                  value={excelSearchTerm}
-                  onChange={(e) => setExcelSearchTerm(e.target.value)}
-                  placeholder="Filter parsed books by title, author, accession, or category..."
-                  className="w-full pl-9 pr-4 py-2 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              {/* Interactive Parsed Books Table */}
-              <div className="border border-zinc-200 rounded-xl overflow-hidden max-h-[420px] overflow-y-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold sticky top-0 z-10">
+              {/* Interactive Parsed Books Table - Fixed column alignment */}
+              <div className="border border-zinc-200 rounded-xl overflow-hidden max-h-[460px] overflow-y-auto shadow-2xs">
+                <table className="w-full text-left text-xs border-collapse table-fixed">
+                  <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold sticky top-0 z-10 text-[11px] uppercase tracking-wider">
                     <tr>
-                      <th className="py-2.5 px-3">#</th>
-                      <th className="py-2.5 px-3">Book Title & TitleId</th>
-                      <th className="py-2.5 px-3">Copies Count</th>
-                      <th className="py-2.5 px-3">Accession / Serial Numbers</th>
-                      <th className="py-2.5 px-3">Author & Publisher</th>
-                      <th className="py-2.5 px-3">Category (Optional)</th>
-                      <th className="py-2.5 px-3">Shelf</th>
-                      <th className="py-2.5 px-3 text-right">Action</th>
+                      <th className="py-3 px-3 text-center w-14">#</th>
+                      <th className="py-3 px-3 text-left w-64">Book Title & TitleId</th>
+                      <th className="py-3 px-3 text-center w-28">Copies Count</th>
+                      <th className="py-3 px-3 text-left w-56">Accession Range</th>
+                      <th className="py-3 px-3 text-left w-48">Author & Publisher</th>
+                      <th className="py-3 px-3 text-center w-28">Category</th>
+                      <th className="py-3 px-3 text-center w-28">Shelf</th>
+                      <th className="py-3 px-3 text-center w-16">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100">
@@ -1075,66 +1197,114 @@ export default function BookCreationView({
                           (b.titleId && b.titleId.toLowerCase().includes(q))
                         );
                       })
-                      .map((book) => (
-                        <tr
-                          key={book.id}
-                          className="hover:bg-zinc-50/70 transition-colors"
-                        >
-                          <td className="py-2.5 px-3 text-[11px] text-zinc-400 font-mono">
-                            {book.rowNumber}
-                          </td>
-                          <td className="py-2.5 px-3 max-w-[220px]">
-                            <div className="font-bold text-zinc-900 truncate">{book.title}</div>
-                            {book.titleId && (
-                              <span className="text-[10px] text-blue-700 font-mono font-medium">
-                                TitleId: {book.titleId}
+                      .map((book) => {
+                        const allSerialsStr = book.copies_detail?.map(c => c.accession).join(', ') || book.accession;
+                        return (
+                          <tr
+                            key={book.id}
+                            className="hover:bg-zinc-50/80 transition-colors"
+                          >
+                            <td className="py-2.5 px-3 text-[11px] text-zinc-400 font-mono text-center align-middle">
+                              {book.rowNumber}
+                            </td>
+                            <td className="py-2.5 px-3 align-middle">
+                              <div className="font-bold text-zinc-900 truncate" title={book.title}>{book.title}</div>
+                              {book.titleId && (
+                                <span className="text-[10px] text-blue-700 font-mono font-medium block">
+                                  TitleId: {book.titleId}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center align-middle">
+                              <span className="inline-block px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                {book.total} {book.total === 1 ? 'Copy' : 'Copies'}
                               </span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
-                              {book.total} {book.total === 1 ? 'Copy' : 'Copies'}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="font-mono font-bold text-zinc-900">{book.accession}</div>
-                            {book.copies_detail && book.copies_detail.length > 1 && (
-                              <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
-                                Serials: {book.copies_detail.map(c => c.accession).join(', ')}
+                            </td>
+                            <td className="py-2.5 px-3 align-middle">
+                              <div className="font-mono font-bold text-zinc-900 text-xs">
+                                Acc: #{book.accession}
                               </div>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3 text-zinc-600 max-w-[170px] truncate">
-                            <div className="font-medium text-zinc-800 truncate">{book.author}</div>
-                            <div className="text-[11px] text-zinc-400 truncate">{book.publisher} ({book.edition})</div>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            {book.hasFileCategory ? (
-                              <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                {book.category}
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-md text-[10px] text-zinc-500 bg-zinc-100 border border-zinc-200">
-                                {defaultUploadCategory || 'General (Default)'}
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3 text-zinc-600 font-mono text-[11px]">
-                            {book.shelf || defaultUploadShelf}
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteParsedRow(book.id)}
-                              className="p-1 text-zinc-400 hover:text-rose-600 transition-colors"
-                              title="Remove from import"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                              {book.copies_detail && book.copies_detail.length > 1 ? (
+                                <div 
+                                  className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate cursor-help"
+                                  title={`All Serials: ${allSerialsStr}`}
+                                >
+                                  {book.total} copies (#{book.copies_detail[0]?.accession} to #{book.copies_detail[book.copies_detail.length - 1]?.accession})
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-zinc-400 font-mono block mt-0.5">Single accession</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-zinc-600 align-middle">
+                              <div className="font-medium text-zinc-800 truncate" title={book.author}>{book.author}</div>
+                              <div className="text-[11px] text-zinc-400 truncate" title={`${book.publisher} (${book.edition})`}>
+                                {book.publisher} • {book.edition}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-center align-middle">
+                              {book.hasFileCategory ? (
+                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 truncate max-w-[100px]" title={book.category}>
+                                  {book.category}
+                                </span>
+                              ) : (
+                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] text-zinc-500 bg-zinc-100 border border-zinc-200 truncate max-w-[100px]">
+                                  {defaultUploadCategory || 'General'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-zinc-600 font-mono text-[11px] text-center align-middle">
+                              {book.shelf || defaultUploadShelf}
+                            </td>
+                            <td className="py-2.5 px-3 text-center align-middle">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteParsedRow(book.id)}
+                                className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                title="Remove from import"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                   </tbody>
+                  <tfoot className="bg-zinc-50/90 font-bold border-t border-zinc-200 text-xs sticky bottom-0 z-10">
+                    <tr>
+                      <td className="py-3 px-3 text-center text-zinc-400">Total</td>
+                      <td className="py-3 px-3 text-zinc-900 font-bold">
+                        {parsedBooks.filter(b => {
+                          if (!excelSearchTerm) return true;
+                          const q = excelSearchTerm.toLowerCase();
+                          return (
+                            b.title.toLowerCase().includes(q) ||
+                            b.author.toLowerCase().includes(q) ||
+                            b.accession.toLowerCase().includes(q) ||
+                            b.category.toLowerCase().includes(q) ||
+                            (b.titleId && b.titleId.toLowerCase().includes(q))
+                          );
+                        }).length.toLocaleString()} Titles
+                      </td>
+                      <td className="py-3 px-3 text-center">
+                        <span className="px-2.5 py-0.5 rounded-md bg-blue-100 text-blue-900 font-bold">
+                          {parsedBooks.filter(b => {
+                            if (!excelSearchTerm) return true;
+                            const q = excelSearchTerm.toLowerCase();
+                            return (
+                              b.title.toLowerCase().includes(q) ||
+                              b.author.toLowerCase().includes(q) ||
+                              b.accession.toLowerCase().includes(q) ||
+                              b.category.toLowerCase().includes(q) ||
+                              (b.titleId && b.titleId.toLowerCase().includes(q))
+                            );
+                          }).reduce((sum, b) => sum + b.total, 0).toLocaleString()} Copies
+                        </span>
+                      </td>
+                      <td colSpan={5} className="py-3 px-3 text-right text-zinc-500 font-medium">
+                        All physical copies mapped with sequential accession numbers
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             </div>

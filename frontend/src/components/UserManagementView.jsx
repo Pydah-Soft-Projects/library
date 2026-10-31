@@ -26,41 +26,6 @@ const ROLE_COLORS = {
   rose: 'bg-rose-50 text-rose-700 border-rose-200'
 };
 
-const DEFAULT_ROLES = [
-  {
-    id: 'librarian',
-    name: 'Librarian',
-    description: 'Catalog management, book creation, circulation desk and lending operations',
-    color: 'blue',
-    is_system: false,
-    page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns']
-  },
-  {
-    id: 'circulation_staff',
-    name: 'Circulation Staff',
-    description: 'Student verification, 30-day lending window, returns and fine assessment',
-    color: 'emerald',
-    is_system: false,
-    page_privileges: ['dashboard', 'all_books', 'book_issues_returns']
-  },
-  {
-    id: 'catalog_assistant',
-    name: 'Catalog Assistant',
-    description: 'Book holdings registration, barcode generation, and accessioning',
-    color: 'purple',
-    is_system: false,
-    page_privileges: ['dashboard', 'book_creation', 'all_books']
-  },
-  {
-    id: 'superadmin',
-    name: 'Superadmin',
-    description: 'Full sovereign governance, user management, and system policies',
-    color: 'zinc',
-    is_system: true,
-    page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
-  }
-];
-
 export default function UserManagementView({ onToast }) {
   const [activeTab, setActiveTab] = useState('mapped_users'); // 'mapped_users' | 'roles'
   const [loading, setLoading] = useState(false);
@@ -104,8 +69,8 @@ export default function UserManagementView({ onToast }) {
     emp_no: '',
     verifiedEmployee: null,
     verifying: false,
-    role_name: 'Librarian',
-    page_privileges: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns']
+    role_name: '',
+    page_privileges: []
   });
 
   // Create Role Form State
@@ -152,15 +117,6 @@ export default function UserManagementView({ onToast }) {
             seen.add(norm);
             mergedRoles.push(r);
           }
-        }
-      }
-
-      // Add baseline library roles if not yet returned by DB
-      for (const dr of DEFAULT_ROLES) {
-        const norm = dr.name.toLowerCase();
-        if (!seen.has(norm)) {
-          seen.add(norm);
-          mergedRoles.push(dr);
         }
       }
 
@@ -253,10 +209,15 @@ export default function UserManagementView({ onToast }) {
       return;
     }
 
+    if (!userForm.role_name) {
+      if (onToast) onToast('Please select a library role to assign.', 'danger');
+      return;
+    }
+
     const empName = userForm.verifiedEmployee?.name || `Employee #${cleanId}`;
     const empDept = userForm.verifiedEmployee?.department || 'General';
     const empDiv = userForm.verifiedEmployee?.division || '';
-    const empEmail = userForm.verifiedEmployee?.email || `${cleanId.toLowerCase()}@pydah.edu.in`;
+    const empEmail = userForm.verifiedEmployee?.email || '';
 
     try {
       const res = await fetch('/api/roles/assign', {
@@ -303,8 +264,8 @@ export default function UserManagementView({ onToast }) {
         emp_no: '',
         verifiedEmployee: null,
         verifying: false,
-        role_name: 'Faculty / Scholar',
-        page_privileges: ['dashboard', 'all_books']
+        role_name: '',
+    page_privileges: []
       });
       setActiveTab('mapped_users');
     } catch (err) {
@@ -499,6 +460,10 @@ export default function UserManagementView({ onToast }) {
   // Action: Open Edit Role Modal
   const handleOpenEditRole = (role) => {
     const isSuperadmin = (role.name || '').toLowerCase().trim() === 'superadmin' || String(role.id).toLowerCase().trim() === 'superadmin';
+    if (isSuperadmin) {
+      if (onToast) onToast('Superadmin role is protected and cannot be edited.', 'warning');
+      return;
+    }
     setEditingRole({
       id: role.id,
       name: role.name,
@@ -633,8 +598,8 @@ export default function UserManagementView({ onToast }) {
                 emp_no: '',
                 verifiedEmployee: null,
                 verifying: false,
-                role_name: 'Faculty / Scholar',
-                page_privileges: ['dashboard', 'all_books']
+                role_name: '',
+    page_privileges: []
               });
               setIsCreateUserModalOpen(true);
             }}
@@ -853,31 +818,33 @@ export default function UserManagementView({ onToast }) {
                           </div>
                         </td>
 
-                        {/* Actions: Role, Privileges, and prominent Delete */}
+                        {/* Actions: Role, Privileges, and prominent Delete (Superadmin has no edit options) */}
                         <td className="py-3 px-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => setChangeRoleUser({ ...user, newRole: user.role })}
-                              className="px-2 py-1 border border-zinc-200 hover:bg-zinc-50 text-zinc-700 text-[11px] font-medium rounded transition-colors"
+                          {isSuperadminUser ? (
+                            <span 
+                              className="px-2.5 py-1 text-[11px] font-medium text-zinc-500 bg-zinc-100 rounded-md border border-zinc-200 inline-flex items-center gap-1.5 cursor-default" 
+                              title="Superadmin account cannot be edited or modified"
                             >
-                              Role
-                            </button>
+                              <Lock className="w-3 h-3 text-zinc-400" />
+                              <span>Protected Superadmin</span>
+                            </span>
+                          ) : (
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => setChangeRoleUser({ ...user, newRole: user.role })}
+                                className="px-2 py-1 border border-zinc-200 hover:bg-zinc-50 text-zinc-700 text-[11px] font-medium rounded transition-colors"
+                              >
+                                Role
+                              </button>
 
-                            <button
-                              onClick={() => setPrivilegeModalUser(user)}
-                              className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-white text-[11px] font-medium rounded transition-colors flex items-center gap-1"
-                            >
-                              <Key className="w-3 h-3" />
-                              <span>Privileges</span>
-                            </button>
+                              <button
+                                onClick={() => setPrivilegeModalUser(user)}
+                                className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-white text-[11px] font-medium rounded transition-colors flex items-center gap-1"
+                              >
+                                <Key className="w-3 h-3" />
+                                <span>Privileges</span>
+                              </button>
 
-                            {/* Deletable User Button (Superadmin account protected) */}
-                            {isSuperadminUser ? (
-                              <span className="px-2 py-1 text-[10px] text-zinc-400 bg-zinc-100 rounded border border-zinc-200 flex items-center gap-1 cursor-default" title="Superadmin cannot be deleted">
-                                <Lock className="w-2.5 h-2.5 text-zinc-400" />
-                                <span>Locked</span>
-                              </span>
-                            ) : (
                               <button
                                 onClick={() => handleDeleteUser(user)}
                                 className="px-2 py-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded text-[11px] font-medium flex items-center gap-1 transition-colors"
@@ -886,8 +853,8 @@ export default function UserManagementView({ onToast }) {
                                 <Trash2 className="w-3 h-3" />
                                 <span>Delete</span>
                               </button>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -984,27 +951,27 @@ export default function UserManagementView({ onToast }) {
                       {userCount} Active {userCount === 1 ? 'User' : 'Users'}
                     </span>
 
-                    <div className="flex items-center gap-1.5">
-                      {/* Edit Role Button */}
-                      <button
-                        onClick={() => handleOpenEditRole(role)}
-                        className="px-2 py-1 border border-zinc-200 hover:bg-zinc-50 text-zinc-700 text-[11px] font-medium rounded flex items-center gap-1 transition-colors"
-                        title={`Edit ${role.name}`}
+                    {isSuperadmin ? (
+                      <span
+                        className="px-2.5 py-1 text-[11px] font-medium text-zinc-500 bg-zinc-100 rounded border border-zinc-200 flex items-center gap-1.5 cursor-not-allowed"
+                        title="Superadmin role is sovereign and cannot be edited or deleted"
                       >
-                        <Edit3 className="w-3 h-3 text-zinc-500" />
-                        <span>Edit</span>
-                      </button>
-
-                      {/* Delete Role Button (Superadmin strictly protected) */}
-                      {isSuperadmin ? (
-                        <span
-                          className="px-2 py-1 text-[11px] font-medium text-zinc-400 bg-zinc-50 rounded border border-zinc-200 flex items-center gap-1 cursor-not-allowed"
-                          title="Superadmin role cannot be deleted"
+                        <Lock className="w-3 h-3 text-zinc-400" />
+                        <span>Fixed System Role</span>
+                      </span>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        {/* Edit Role Button */}
+                        <button
+                          onClick={() => handleOpenEditRole(role)}
+                          className="px-2 py-1 border border-zinc-200 hover:bg-zinc-50 text-zinc-700 text-[11px] font-medium rounded flex items-center gap-1 transition-colors"
+                          title={`Edit ${role.name}`}
                         >
-                          <Lock className="w-3 h-3 text-zinc-400" />
-                          <span>Protected</span>
-                        </span>
-                      ) : (
+                          <Edit3 className="w-3 h-3 text-zinc-500" />
+                          <span>Edit</span>
+                        </button>
+
+                        {/* Delete Role Button */}
                         <button
                           onClick={() => handleDeleteRole(role)}
                           className="px-2 py-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded text-[11px] font-medium flex items-center gap-1 transition-colors"
@@ -1013,8 +980,8 @@ export default function UserManagementView({ onToast }) {
                           <Trash2 className="w-3 h-3" />
                           <span>Delete</span>
                         </button>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -1165,42 +1132,11 @@ export default function UserManagementView({ onToast }) {
                 </div>
               )}
 
-              {/* Role Selection: Interactive Choice with Visual Cards and Dropdown */}
+              {/* Role Selection: Clean Dropdown */}
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block font-semibold text-zinc-700 text-xs">
-                    Assign Library Role *
-                  </label>
-                  <span className="text-[10px] text-zinc-400">
-                    Click a role below or select from dropdown
-                  </span>
-                </div>
-
-                {/* Quick Select Role Cards */}
-                <div className="grid grid-cols-2 gap-2 mb-2.5">
-                  {roles.map(r => {
-                    const isSelected = userForm.role_name === r.name;
-                    return (
-                      <div
-                        key={r.id || r.name}
-                        onClick={() => handleRoleChangeInForm(r.name)}
-                        className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all flex flex-col justify-between ${
-                          isSelected
-                            ? 'bg-zinc-900 text-white border-zinc-900 shadow-xs ring-2 ring-zinc-900/10'
-                            : 'bg-white hover:bg-zinc-50 border-zinc-200 text-zinc-800'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold truncate">{r.name}</span>
-                          {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0 ml-1" />}
-                        </div>
-                        <span className={`text-[10px] mt-1 line-clamp-1 ${isSelected ? 'text-zinc-300' : 'text-zinc-400'}`}>
-                          {r.page_privileges?.length || 0} of 6 privileges
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                <label className="block font-semibold text-zinc-700 text-xs mb-1.5">
+                  Assign Library Role *
+                </label>
 
                 {/* Dropdown Selector */}
                 <select

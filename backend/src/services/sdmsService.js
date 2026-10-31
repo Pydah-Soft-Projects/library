@@ -42,11 +42,12 @@ async function searchStudents(query = '', limit = 25) {
       SELECT 
         s.id,
         s.student_name,
-        s.admission_number,
         s.pin_no,
-        s.email,
+        s.admission_number,
         s.current_year,
         s.current_semester,
+        s.email,
+        s.student_photo,
         r.roll_number,
         b.name AS branch_name,
         b.code AS branch_code,
@@ -66,15 +67,29 @@ async function searchStudents(query = '', limit = 25) {
           s.pin_no LIKE ? OR 
           s.admission_number LIKE ? OR 
           r.roll_number LIKE ?
+        ORDER BY 
+          (CASE 
+            WHEN s.pin_no = ? THEN 1
+            WHEN s.student_name LIKE ? THEN 2
+            WHEN s.student_name LIKE ? THEN 3
+            WHEN s.pin_no LIKE ? THEN 4
+            ELSE 5 
+          END),
+          s.id DESC
+        LIMIT ?
       `;
-      const pattern = `%${clean}%`;
-      params.push(pattern, pattern, pattern, pattern);
+      const patternAny = `%${clean}%`;
+      const patternStart = `${clean}%`;
+      const patternWord = `% ${clean}%`;
+      // WHERE params (4)
+      params.push(patternAny, patternAny, patternAny, patternAny);
+      // ORDER BY params (4)
+      params.push(clean, patternStart, patternWord, patternStart);
+      params.push(limitNum);
     } else {
-      sql += ` WHERE (s.student_name IS NOT NULL AND s.student_name != '') `;
+      sql += ` WHERE (s.student_name IS NOT NULL AND s.student_name != '') ORDER BY s.id DESC LIMIT ?`;
+      params.push(limitNum);
     }
-
-    sql += ` ORDER BY s.id DESC LIMIT ?`;
-    params.push(limitNum);
 
     const [rows] = await p.query(sql, params);
 
@@ -85,6 +100,8 @@ async function searchStudents(query = '', limit = 25) {
       const dept = branchDisplay && courseDisplay
         ? `${branchDisplay} (${courseDisplay})`
         : (branchDisplay || courseDisplay || 'General');
+
+      const photoUrl = s.student_photo || s.photo || s.image || s.student_image || s.profile_photo || s.photo_url || s.image_url || null;
 
       return {
         id: s.id,
@@ -97,7 +114,11 @@ async function searchStudents(query = '', limit = 25) {
         department: dept,
         year: s.current_year ? `${s.current_year}${getOrdinal(s.current_year)} Year` : '1st Year',
         semester: s.current_semester ? `Sem ${s.current_semester}` : '',
-        email: s.email || `${pin.toLowerCase()}@pydah.edu.in`,
+        email: s.email ? String(s.email).trim() : '',
+        photo: photoUrl,
+        image: photoUrl,
+        photo_url: photoUrl,
+        student_photo: photoUrl,
         status: 'Active',
         source: 'SDMS Database'
       };
@@ -120,13 +141,7 @@ async function getStudentByPin(pinOrId) {
     const p = getPool();
     const sql = `
       SELECT 
-        s.id,
-        s.student_name,
-        s.admission_number,
-        s.pin_no,
-        s.email,
-        s.current_year,
-        s.current_semester,
+        s.*,
         r.roll_number,
         b.name AS branch_name,
         b.code AS branch_code,
@@ -154,6 +169,8 @@ async function getStudentByPin(pinOrId) {
       ? `${branchDisplay} (${courseDisplay})`
       : (branchDisplay || courseDisplay || 'General');
 
+    const photoUrl = s.student_photo || s.photo || s.image || s.student_image || s.profile_photo || s.photo_url || s.image_url || null;
+
     return {
       id: s.id,
       name: s.student_name || 'Student',
@@ -165,7 +182,11 @@ async function getStudentByPin(pinOrId) {
       department: dept,
       year: s.current_year ? `${s.current_year}${getOrdinal(s.current_year)} Year` : '1st Year',
       semester: s.current_semester ? `Sem ${s.current_semester}` : '',
-      email: s.email || `${pin.toLowerCase()}@pydah.edu.in`,
+      email: s.email ? String(s.email).trim() : '',
+      photo: photoUrl,
+      image: photoUrl,
+      photo_url: photoUrl,
+      student_photo: photoUrl,
       status: 'Active',
       source: 'SDMS Database'
     };

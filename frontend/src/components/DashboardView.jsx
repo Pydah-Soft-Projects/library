@@ -18,7 +18,7 @@ export default function DashboardView({
   const totalTitles = books.length;
   const totalCopies = books.reduce((sum, b) => sum + (b.total !== undefined ? Number(b.total) : (Number(b.total_copies) || 0)), 0);
   const availableCopies = books.reduce((sum, b) => sum + (b.available !== undefined ? Number(b.available) : (Number(b.total) || 0)), 0);
-  const activeLoans = loans.filter(l => l.status === 'Issued' || l.status === 'Active' || l.status === 'Overdue');
+  const activeLoans = loans.filter(l => l.status !== 'Returned');
   const overdueLoans = loans.filter(l => l.status === 'Overdue');
   const unpaidFines = fines.filter(f => f.status === 'Unpaid' || f.status === 'Pending');
   const totalFineAmount = unpaidFines.reduce((sum, f) => sum + Number(f.amount || 0), 0);

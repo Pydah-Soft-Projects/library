@@ -44,67 +44,38 @@ async function issueBook(req, res) {
       return res.status(400).json({ error: `All copies of "${book.title}" are currently on loan.` });
     }
 
-    // 2. Find patron in MongoDB Atlas
-    let student = null;
-    if (patron_id) {
-      const cleanPatronId = String(patron_id).trim();
-      student = await User.findOne({
-        $or: [
-          { patron_id: cleanPatronId },
-          { patron_id: cleanPatronId.toUpperCase() },
-          { email: cleanPatronId.toLowerCase() },
-          { username: cleanPatronId.toLowerCase() },
-          { full_name: new RegExp(`^${cleanPatronId}$`, 'i') }
-        ]
-      });
-    } else if (user_id) {
-      try {
-        if (mongoose.Types.ObjectId.isValid(user_id)) {
-          student = await User.findById(user_id);
-        }
-      } catch (_) {}
+    // 2. Identify Patron directly via SDMS (DO NOT touch the User schema)
+    const cleanPatronId = String(patron_id || user_id || '').trim();
+    if (!cleanPatronId) {
+      return res.status(400).json({ error: 'Student PIN number or Patron ID is required to issue book.' });
     }
 
-    if (!student && patron_id) {
-      const cleanPatronId = String(patron_id).trim();
-      const sdmsStudent = await sdmsService.getStudentByPin(cleanPatronId).catch(() => null);
-      if (sdmsStudent) {
-        student = await User.create({
-          username: (sdmsStudent.pin_no || sdmsStudent.rollNo || cleanPatronId).toLowerCase(),
-          full_name: sdmsStudent.name,
-          email: sdmsStudent.email,
-          patron_id: sdmsStudent.pin_no || sdmsStudent.rollNo || cleanPatronId,
-          department: sdmsStudent.department,
-          role: 'Student',
-          role_id: 4,
-          status: 'Active',
-          password: await bcrypt.hash('student123', 10)
-        });
-      }
+    let patronName = req.body.patron_name ? String(req.body.patron_name).trim() : '';
+    let patronDept = req.body.department ? String(req.body.department).trim() : 'General';
+
+    // Verify student directly from live SDMS database
+    const sdmsStudent = await sdmsService.getStudentByPin(cleanPatronId).catch(() => null);
+    if (sdmsStudent) {
+      patronName = sdmsStudent.name || patronName || cleanPatronId;
+      patronDept = sdmsStudent.department || patronDept;
+    } else if (!patronName) {
+      patronName = `Student #${cleanPatronId}`;
     }
 
-    if (!student) {
-      return res.status(404).json({
-        error: `Cannot issue book: Student / Patron "${patron_id || user_id || 'Unknown'}" not found in Library or SDMS database.`
-      });
-    }
-
-    const patronDocId = student._id;
-
-    // 3. Verify Account Hold / Overdue Check from MongoDB
+    // 3. Verify Account Hold / Overdue Check directly from Loan and Fine collections
     const existingOverdues = await Loan.countDocuments({
-      user_id: patronDocId,
+      patron_id: { $regex: new RegExp(`^${cleanPatronId}$`, 'i') },
       status: 'Overdue'
     });
     const unpaidFines = await Fine.find({
-      user_id: patronDocId,
+      patron_id: { $regex: new RegExp(`^${cleanPatronId}$`, 'i') },
       status: 'Unpaid'
     }).lean();
 
-    if (existingOverdues > 0 || unpaidFines.length > 0 || student.status === 'Frozen') {
-      const totalDues = unpaidFines.reduce((sum, f) => sum + f.amount, 0);
+    if (existingOverdues > 0 || unpaidFines.length > 0) {
+      const totalDues = unpaidFines.reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
       return res.status(403).json({
-        error: 'PATRON ACCOUNT FROZEN: Borrowing privilege suspended due to overdue loans or unpaid penalties.',
+        error: `PATRON ACCOUNT FROZEN: Borrowing privilege suspended for ${patronName} (${cleanPatronId}) due to ${existingOverdues} overdue book(s) or ₹${totalDues} unpaid fine(s).`,
         overdue_items: existingOverdues,
         unpaid_fines_inr: totalDues
       });
@@ -116,13 +87,13 @@ async function issueBook(req, res) {
     const maxQuota = settings?.max_books_quota || 4;
 
     const currentLoansCount = await Loan.countDocuments({
-      user_id: patronDocId,
+      patron_id: { $regex: new RegExp(`^${cleanPatronId}$`, 'i') },
       status: { $in: ['Borrowed', 'Overdue', 'Active'] }
     });
 
     if (currentLoansCount >= maxQuota) {
       return res.status(403).json({
-        error: `Borrowing quota reached. Patron already has ${currentLoansCount} active loans (Limit: ${maxQuota}).`
+        error: `Borrowing quota reached: Patron ${patronName} (${cleanPatronId}) already has ${currentLoansCount} active loans (Institutional limit: ${maxQuota} books).`
       });
     }
 
@@ -142,16 +113,36 @@ async function issueBook(req, res) {
       dueDateObj.setDate(issueDate.getDate() + defaultLoanDays);
     }
 
-    // 6. Create Loan in MongoDB
+    // 6. Determine single book number to issue
+    let singleAccession = cleanBarcode;
+    if (Array.isArray(book.copies_detail) && book.copies_detail.length > 0) {
+      let copy = book.copies_detail.find(c => 
+        (c.barcode === cleanBarcode || c.accession === cleanBarcode ||
+         c.barcode === strippedBarcode || c.accession === strippedBarcode) &&
+        c.status === 'Available'
+      );
+      if (!copy) {
+        copy = book.copies_detail.find(c => c.status === 'Available') || book.copies_detail[0];
+      }
+      if (copy) {
+        copy.status = 'Borrowed';
+        singleAccession = copy.accession || copy.barcode || copy.serial_no || cleanBarcode;
+      }
+    }
+    if (String(singleAccession).includes('-')) {
+      singleAccession = String(singleAccession).split('-')[0].trim();
+    }
+
+    // 7. Create Loan in MongoDB (user_id is strictly null for SDMS students)
     const loanDoc = await Loan.create({
       book_id: book._id,
       book_title: book.title,
-      book_barcode: cleanBarcode,
-      accession: book.accession,
-      user_id: student._id,
-      patron_id: student.patron_id || student.username || `PATRON-${student._id.toString().slice(-4)}`,
-      patron_name: student.full_name,
-      department: student.department || 'General',
+      book_barcode: singleAccession,
+      accession: singleAccession,
+      user_id: null,
+      patron_id: cleanPatronId,
+      patron_name: patronName,
+      department: patronDept,
       staff_id: req.user?.userId || 'ADMIN',
       issue_date: issueDate,
       due_date: dueDateObj,
@@ -176,10 +167,10 @@ async function issueBook(req, res) {
       action_key: 'circulation.issue',
       target_resource: `LOAN:${loanDoc._id.toString()}`,
       payload: {
-        patron: student.full_name,
-        patron_id: student.patron_id,
+        patron: patronName,
+        patron_id: cleanPatronId,
         book: book.title,
-        accession: book.accession,
+        accession: singleAccession,
         due_date: dueDateObj.toISOString()
       }
     });
@@ -187,15 +178,15 @@ async function issueBook(req, res) {
     const dueDateFormatted = dueDateObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
     res.status(201).json({
-      message: `Book "${book.title}" successfully issued to ${student.full_name}.`,
+      message: `Book "${book.title}" successfully issued to ${patronName}.`,
       loan: {
         id: loanDoc._id.toString(),
         bookTitle: book.title,
         bookBarcode: cleanBarcode,
-        accession: book.accession,
-        patronName: student.full_name,
-        patronId: student.patron_id || student.username,
-        department: student.department,
+        accession: singleAccession,
+        patronName: patronName,
+        patronId: cleanPatronId,
+        department: patronDept,
         issueDateFormatted: 'Today',
         dueDateFormatted,
         issue_date: issueDate.toISOString(),
@@ -206,7 +197,7 @@ async function issueBook(req, res) {
       book: {
         id: book._id.toString(),
         title: book.title,
-        accession: book.accession,
+        accession: singleAccession,
         remaining_copies: book.available
       },
       due_date_formatted: dueDateFormatted
@@ -298,14 +289,7 @@ async function returnBook(req, res) {
       await book.save();
     }
 
-    // Automatically restore active account if no more pending fines or overdues
-    if (loan.user_id) {
-      const remainingOverdues = await Loan.countDocuments({ user_id: loan.user_id, status: 'Overdue' });
-      const remainingFines = await Fine.countDocuments({ user_id: loan.user_id, status: 'Unpaid' });
-      if (remainingOverdues === 0 && remainingFines === 0) {
-        await User.findByIdAndUpdate(loan.user_id, { status: 'Active' });
-      }
-    }
+    // Returns handled directly via Loan/Fine ledgers without touching User schema
 
     await logAudit({
       actor_id: req.user?.userId || 'STAFF',
@@ -318,12 +302,26 @@ async function returnBook(req, res) {
       }
     });
 
+    const returnDateFormatted = now.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
     res.json({
       message: `Book "${loan.book_title}" returned successfully.`,
       reshelf_location: book?.shelf || 'Central Stack',
       fine_assessed: fineAmount > 0,
       fine_amount_inr: fineAmount,
-      fine: fineDoc ? fineDoc.toObject() : null
+      fine: fineDoc ? fineDoc.toObject() : null,
+      loan: {
+        id: loan._id.toString(),
+        _id: loan._id.toString(),
+        bookTitle: loan.book_title,
+        accession: loan.accession,
+        patronId: loan.patron_id,
+        patronName: loan.patron_name,
+        status: 'Returned',
+        return_date: now.toISOString(),
+        returnDate: now.toISOString(),
+        returnDateFormatted: returnDateFormatted
+      }
     });
   } catch (err) {
     console.error('Error returning book:', err);
@@ -410,6 +408,16 @@ async function getActiveLoans(req, res) {
     const formattedLoans = rawLoans.map(l => {
       const issueDate = l.issue_date ? new Date(l.issue_date) : new Date(l.created_at || Date.now());
       const dueDate = l.due_date ? new Date(l.due_date) : new Date();
+      const rawReturnDate = l.return_date || (l.status === 'Returned' && l.updated_at ? l.updated_at : null);
+      const returnDateObj = rawReturnDate ? new Date(rawReturnDate) : null;
+      const returnDateFormatted = returnDateObj && !isNaN(returnDateObj.getTime())
+        ? returnDateObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : (l.status === 'Returned' ? 'Returned' : null);
+
+      let singleAcc = l.accession || l.book_barcode || '';
+      if (String(singleAcc).includes('-')) {
+        singleAcc = String(singleAcc).split('-')[0].trim();
+      }
 
       return {
         id: l._id.toString(),
@@ -417,15 +425,18 @@ async function getActiveLoans(req, res) {
         loan_id: l._id.toString(),
         bookTitle: l.book_title,
         book_title: l.book_title,
-        bookBarcode: l.book_barcode || l.accession,
-        accession: l.accession,
+        bookBarcode: singleAcc,
+        accession: singleAcc,
         patronName: l.patron_name,
         patronId: l.patron_id,
         department: l.department || 'General',
         issue_date: issueDate.toISOString(),
         due_date: dueDate.toISOString(),
+        return_date: returnDateObj ? returnDateObj.toISOString() : null,
+        returnDate: returnDateObj ? returnDateObj.toISOString() : null,
         issueDateFormatted: issueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
         dueDateFormatted: dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+        returnDateFormatted: returnDateFormatted,
         status: l.status || 'Borrowed',
         renewalsCount: l.renewals_count || 0
       };
@@ -576,18 +587,24 @@ async function bulkImportCirculations(req, res) {
           return_date: returnDate
         });
 
+        const retDate = newLoan.return_date ? new Date(newLoan.return_date) : null;
         createdLoans.push({
           id: newLoan._id.toString(),
+          _id: newLoan._id.toString(),
           accession: newLoan.accession,
-          bookBarcode: newLoan.barcode,
+          bookBarcode: newLoan.barcode || newLoan.book_barcode,
           bookTitle: newLoan.book_title,
           patronId: newLoan.patron_id,
           patronName: newLoan.patron_name,
           department: newLoan.department,
           status: newLoan.status,
-          issueDate: newLoan.issue_date ? newLoan.issue_date.toISOString().split('T')[0] : '',
-          dueDate: newLoan.due_date ? newLoan.due_date.toISOString().split('T')[0] : '',
-          dueDateFormatted: newLoan.due_date ? newLoan.due_date.toLocaleDateString('en-GB') : ''
+          issue_date: newLoan.issue_date ? newLoan.issue_date.toISOString() : '',
+          due_date: newLoan.due_date ? newLoan.due_date.toISOString() : '',
+          return_date: retDate ? retDate.toISOString() : '',
+          returnDate: retDate ? retDate.toISOString() : '',
+          issueDateFormatted: newLoan.issue_date ? newLoan.issue_date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
+          dueDateFormatted: newLoan.due_date ? newLoan.due_date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
+          returnDateFormatted: retDate ? retDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
         });
       } catch (err) {
         errors.push({ index: i, error: err.message });

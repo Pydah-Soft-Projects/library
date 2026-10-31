@@ -15,7 +15,7 @@ export default function AllBooksView({
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'available' | 'circulating'
+  const [activeTab, setActiveTab] = useState('available'); // 'available' (first) | 'total' (second)
   const [viewMode, setViewMode] = useState('table'); // 'table' | 'grid'
   const [editingBook, setEditingBook] = useState(null);
   const [viewingCopiesBook, setViewingCopiesBook] = useState(null);
@@ -41,9 +41,7 @@ export default function AllBooksView({
 
   const filteredBooks = books.filter(b => {
     const matchCat = selectedCategory === 'All' || b.category === selectedCategory;
-    let matchStatus = true;
-    if (statusFilter === 'available') matchStatus = (b.available || 0) > 0;
-    if (statusFilter === 'circulating') matchStatus = (b.available || 0) < (b.total || 0);
+    const matchTab = activeTab === 'available' ? (b.available || 0) > 0 : true;
 
     const q = searchTerm.toLowerCase();
     const matchQuery = !searchTerm ||
@@ -54,7 +52,7 @@ export default function AllBooksView({
       (b.shelf && b.shelf.toLowerCase().includes(q)) ||
       (b.isbn && b.isbn.toLowerCase().includes(q));
 
-    return matchCat && matchStatus && matchQuery;
+    return matchCat && matchTab && matchQuery;
   });
 
   const handleEditSubmit = (e) => {
@@ -87,40 +85,73 @@ export default function AllBooksView({
         </button>
       </div>
 
-      {/* Dynamic Statistics Strip */}
-      <div className="border-t border-b border-zinc-200 grid grid-cols-2 lg:grid-cols-5 py-2 divide-y sm:divide-y-0 sm:divide-x divide-zinc-200 bg-zinc-50/30">
-        <div className="p-4">
-          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">Total Titles</span>
-          <div className="text-2xl font-bold text-zinc-900 mt-0.5">{books.length}</div>
-          <span className="text-[11px] text-zinc-400 mt-0.5 block">Catalogued volumes</span>
+      {/* Summary Statistics Strip (1st Place Available, 2nd Place Total) */}
+      <div className="border-t border-b border-zinc-200 grid grid-cols-2 lg:grid-cols-4 py-2 divide-y sm:divide-y-0 sm:divide-x divide-zinc-200 bg-zinc-50/40">
+        <div className="p-4 bg-emerald-50/30">
+          <span className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider block">1. Available on Shelf</span>
+          <div className="text-2xl font-bold text-emerald-700 mt-0.5">{availableCopies.toLocaleString()}</div>
+          <span className="text-[11px] text-emerald-700 mt-0.5 block font-medium">Ready to borrow now</span>
+        </div>
+
+        <div className="p-4 bg-blue-50/20">
+          <span className="text-[11px] font-semibold text-blue-800 uppercase tracking-wider block">2. Total Library Books</span>
+          <div className="text-2xl font-bold text-blue-900 mt-0.5">
+            {books.length.toLocaleString()} <span className="text-sm font-normal text-blue-700">({totalCopies.toLocaleString()} copies)</span>
+          </div>
+          <span className="text-[11px] text-blue-600 mt-0.5 block font-medium">Full catalog holdings</span>
         </div>
 
         <div className="p-4">
-          <span className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider block">Total Physical Copies</span>
-          <div className="text-2xl font-bold text-blue-900 mt-0.5">{totalCopies}</div>
-          <span className="text-[11px] text-blue-600 mt-0.5 block font-medium">Sequential accessioned copies</span>
+          <span className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider block">Currently Issued</span>
+          <div className="text-2xl font-bold text-amber-900 mt-0.5">{circulatingCopies.toLocaleString()}</div>
+          <span className="text-[11px] text-amber-700 mt-0.5 block">Books with students</span>
         </div>
 
         <div className="p-4">
-          <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider block">Available on Shelf</span>
-          <div className="text-2xl font-bold text-emerald-700 mt-0.5">{availableCopies}</div>
-          <span className="text-[11px] text-emerald-600 mt-0.5 block font-medium">{totalCopies > 0 ? Math.round((availableCopies / totalCopies) * 100) : 100}% on rack ready to borrow</span>
-        </div>
-
-        <div className="p-4">
-          <span className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider block">Currently On Loan</span>
-          <div className="text-2xl font-bold text-amber-900 mt-0.5">{circulatingCopies}</div>
-          <span className="text-[11px] text-amber-700 mt-0.5 block">Circulating borrower loans</span>
-        </div>
-
-        <div className="p-4">
-          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">Dynamic Categories</span>
+          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">Categories</span>
           <div className="text-2xl font-bold text-zinc-900 mt-0.5">{dynamicCategories.filter(c => c !== 'All').length}</div>
-          <span className="text-[11px] text-zinc-400 mt-0.5 block">Department subjects</span>
+          <span className="text-[11px] text-zinc-400 mt-0.5 block">Subject departments</span>
         </div>
       </div>
 
-      {/* Flat Toolbar: Search, Filters & View Toggle (No Rounded Card) */}
+      {/* 2 Primary Tabs: 1st Available Copies, 2nd Total Books */}
+      <div className="flex items-center gap-6 border-b border-zinc-200">
+        <button
+          type="button"
+          onClick={() => setActiveTab('available')}
+          className={`pb-3 text-sm font-semibold transition-colors flex items-center gap-2 border-b-2 cursor-pointer ${
+            activeTab === 'available'
+              ? 'border-emerald-600 text-emerald-700 font-bold'
+              : 'border-transparent text-zinc-500 hover:text-zinc-900'
+          }`}
+        >
+          <span>Available Copies</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            activeTab === 'available' ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600'
+          }`}>
+            {availableCopies.toLocaleString()}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('total')}
+          className={`pb-3 text-sm font-semibold transition-colors flex items-center gap-2 border-b-2 cursor-pointer ${
+            activeTab === 'total'
+              ? 'border-blue-600 text-blue-700 font-bold'
+              : 'border-transparent text-zinc-500 hover:text-zinc-900'
+          }`}
+        >
+          <span>Total Books</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            activeTab === 'total' ? 'bg-blue-100 text-blue-800' : 'bg-zinc-100 text-zinc-600'
+          }`}>
+            {books.length.toLocaleString()} ({totalCopies.toLocaleString()} Copies)
+          </span>
+        </button>
+      </div>
+
+      {/* Flat Toolbar: Search, Filters & View Toggle */}
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           {/* Aligned Search Input */}
@@ -130,46 +161,12 @@ export default function AllBooksView({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by title, author, accession, barcode, or shelf..."
+              placeholder="Search books by title, author, book number, or shelf..."
               className="w-full pl-9 pr-3 py-2 text-xs border border-zinc-200 rounded-lg text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors"
             />
           </div>
 
-          {/* Status Tabs & View Mode */}
           <div className="flex items-center gap-2">
-            <div className="flex items-center border border-zinc-200 rounded-lg p-0.5 text-xs">
-              <button
-                onClick={() => setStatusFilter('all')}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  statusFilter === 'all'
-                    ? 'bg-zinc-900 text-white'
-                    : 'text-zinc-600 hover:text-zinc-900'
-                }`}
-              >
-                All ({books.length})
-              </button>
-              <button
-                onClick={() => setStatusFilter('available')}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  statusFilter === 'available'
-                    ? 'bg-zinc-900 text-white'
-                    : 'text-zinc-600 hover:text-zinc-900'
-                }`}
-              >
-                On Shelf ({availableCopies})
-              </button>
-              <button
-                onClick={() => setStatusFilter('circulating')}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  statusFilter === 'circulating'
-                    ? 'bg-zinc-900 text-white'
-                    : 'text-zinc-600 hover:text-zinc-900'
-                }`}
-              >
-                On Loan ({circulatingCopies})
-              </button>
-            </div>
-
             <div className="flex items-center border border-zinc-200 rounded-lg p-0.5">
               <button
                 onClick={() => setViewMode('table')}
@@ -216,7 +213,7 @@ export default function AllBooksView({
         <div className="py-16 text-center border-t border-b border-zinc-200">
           <p className="text-xs text-zinc-500">No books found matching your search or filters.</p>
           <button
-            onClick={() => { setSearchTerm(''); setSelectedCategory('All'); setStatusFilter('all'); }}
+            onClick={() => { setSearchTerm(''); setSelectedCategory('All'); setActiveTab('available'); }}
             className="mt-2 text-xs font-medium text-zinc-900 underline"
           >
             Clear Filters

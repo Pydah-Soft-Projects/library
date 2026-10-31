@@ -7,6 +7,50 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
+
+// Helper to render live SDMS student photo directly without portal storage (with enlarged passport portrait support)
+function StudentSdmsPhoto({ student, size = 'md', className = '' }) {
+  const [hasError, setHasError] = useState(false);
+  const photoUrl = student?.photo || student?.student_photo || student?.image || student?.photo_url || student?.image_url;
+  const initial = student?.name 
+    ? student.name.charAt(0).toUpperCase() 
+    : (student?.student_name ? student.student_name.charAt(0).toUpperCase() : 'S');
+
+  useEffect(() => {
+    setHasError(false);
+  }, [student?.pin_no, student?.rollNo, photoUrl]);
+
+  let defaultDim = 'w-12 h-12 rounded-xl text-base';
+  if (size === 'sm') {
+    defaultDim = 'w-9 h-9 rounded-xl text-xs';
+  } else if (size === 'md') {
+    defaultDim = 'w-14 h-14 rounded-xl text-lg';
+  } else if (size === 'lg') {
+    defaultDim = 'w-16 h-20 rounded-2xl text-xl';
+  } else if (size === 'card' || size === 'xl') {
+    defaultDim = 'w-20 h-24 rounded-2xl text-2xl';
+  }
+
+  const dim = className || defaultDim;
+
+  if (photoUrl && !hasError) {
+    return (
+      <img
+        src={photoUrl}
+        alt={student?.name || 'Student'}
+        onError={() => setHasError(true)}
+        className={`${dim} object-cover border-2 border-blue-300/90 shrink-0 shadow-md bg-blue-50 ring-4 ring-blue-100/60 transition-transform`}
+      />
+    );
+  }
+
+  return (
+    <div className={`${dim} bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold shrink-0 shadow-md shadow-blue-500/25 ring-4 ring-blue-100/60`}>
+      {initial}
+    </div>
+  );
+}
+
 export default function BookIssuesReturnsView({
   books = [],
   loans = [],
@@ -31,6 +75,9 @@ export default function BookIssuesReturnsView({
   const maxBooksQuota = Number(systemSettings?.max_books_quota || 4);
   const maxRenewals = Number(systemSettings?.max_renewals || 2);
 
+  // Prevent duplicate double-issue clicks
+  const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
+
   // Active Form: null, 'issue', 'return', or 'bulk'
   const [activeForm, setActiveForm] = useState(() => {
     if (prefilledBook) return 'issue';
@@ -43,6 +90,61 @@ export default function BookIssuesReturnsView({
       setActiveForm(initialSection);
     }
   }, [initialSection]);
+
+  // Helper to extract clean single book number (e.g. "1" from "1 - 3")
+  const getSingleBookNumber = (val) => {
+    if (!val) return '1';
+    const str = String(val).trim();
+    if (str.includes('-')) {
+      return str.split('-')[0].trim();
+    }
+    return str;
+  };
+
+  // Inspection Popup Modal for Clicked Circulation Rows
+  const [inspectingLoan, setInspectingLoan] = useState(null);
+  const [inspectingStudent, setInspectingStudent] = useState(null);
+  const [isFetchingInspectingStudent, setIsFetchingInspectingStudent] = useState(false);
+
+  const handleInspectLoan = (loan) => {
+    if (!loan) return;
+    setInspectingLoan(loan);
+    setInspectingStudent(null);
+
+    const pinToFetch = loan.patronId || loan.patron_id;
+    if (pinToFetch) {
+      setIsFetchingInspectingStudent(true);
+      fetch(`/api/sdms/students/${encodeURIComponent(pinToFetch)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.student) {
+            setInspectingStudent(data.student);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setIsFetchingInspectingStudent(false));
+    }
+  };
+
+  // Helper to accurately format returned date
+  const getFormattedReturnDate = (loan) => {
+    if (!loan) return null;
+    if (loan.returnDateFormatted) return loan.returnDateFormatted;
+    if (loan.return_date_formatted) return loan.return_date_formatted;
+    const rawDate = loan.returnDate || loan.return_date || loan.returnedAt || loan.returned_date || (loan.status === 'Returned' ? (loan.updated_at || loan.updatedAt) : null);
+    if (rawDate) {
+      try {
+        const d = new Date(rawDate);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        }
+      } catch {}
+    }
+    if (loan.status === 'Returned') {
+      return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    return null;
+  };
 
   // Helper to accurately get available stock for any book format
   const getBookAvailableCount = (b) => {
@@ -111,6 +213,7 @@ export default function BookIssuesReturnsView({
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const issueSearchDebounceRef = useRef(null);
+  const issueSearchAbortRef = useRef(null);
   const issueDropdownRef = useRef(null);
 
   // Borrowing Window: Defaults to Settings page "default_loan_days"
@@ -138,13 +241,15 @@ export default function BookIssuesReturnsView({
 
   const selectedBookStock = selectedBook ? getBookAvailableCount(selectedBook) : 0;
 
-  // Live SDMS Database Student Lookup on Keystroke (Issue Desk)
+  // Live SDMS Database Student Lookup on Keystroke (Issue Desk) - Optimized with AbortController
   const handleIssueStudentSearchChange = (val) => {
     setStudentSearchInput(val);
     setSelectedStudent(null);
 
     const query = val.trim();
-    if (!query) {
+    if (!query || query.length < 2) {
+      if (issueSearchAbortRef.current) issueSearchAbortRef.current.abort();
+      clearTimeout(issueSearchDebounceRef.current);
       setSdmsResults([]);
       setIsSearchingSdms(false);
       setIsDropdownOpen(false);
@@ -156,13 +261,20 @@ export default function BookIssuesReturnsView({
     setIsDropdownOpen(true);
 
     issueSearchDebounceRef.current = setTimeout(async () => {
+      if (issueSearchAbortRef.current) {
+        issueSearchAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      issueSearchAbortRef.current = controller;
+
       try {
-        const res = await fetch(`/api/sdms/students?search=${encodeURIComponent(query)}&limit=10`);
+        const res = await fetch(`/api/sdms/students?search=${encodeURIComponent(query)}&limit=10`, {
+          signal: controller.signal
+        });
         if (!res.ok) {
           throw new Error(`SDMS status ${res.status}`);
         }
-        const text = await res.text();
-        const data = text ? JSON.parse(text) : {};
+        const data = await res.json();
         if (Array.isArray(data.students)) {
           setSdmsResults(data.students);
           setIsDropdownOpen(true);
@@ -170,6 +282,7 @@ export default function BookIssuesReturnsView({
           setSdmsResults([]);
         }
       } catch (err) {
+        if (err.name === 'AbortError') return;
         console.warn('SDMS search fallback to local students:', err.message);
         const clean = query.toLowerCase();
         const localMatches = students.filter(s => 
@@ -181,7 +294,9 @@ export default function BookIssuesReturnsView({
         setSdmsResults(localMatches);
         setIsDropdownOpen(localMatches.length > 0);
       } finally {
-        setIsSearchingSdms(false);
+        if (issueSearchAbortRef.current === controller) {
+          setIsSearchingSdms(false);
+        }
       }
     }, 250);
   };
@@ -190,6 +305,17 @@ export default function BookIssuesReturnsView({
     setSelectedStudent(st);
     setStudentSearchInput(`${st.name} (${st.pin_no || st.rollNo})`);
     setIsDropdownOpen(false);
+    // Fetch full profile from SDMS if photo is not loaded yet
+    if (!st.photo && !st.student_photo && (st.pin_no || st.rollNo)) {
+      fetch(`/api/sdms/students/${encodeURIComponent(st.pin_no || st.rollNo)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.student) {
+            setSelectedStudent(data.student);
+          }
+        })
+        .catch(() => {});
+    }
   };
 
   const handleClearSelectedStudent = () => {
@@ -225,8 +351,10 @@ export default function BookIssuesReturnsView({
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
   })();
 
-  const handleIssueSubmit = (e) => {
+  const handleIssueSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmittingIssue) return;
+
     if (!selectedBook) {
       if (onToast) onToast('Please search and select a book to issue', 'error');
       return;
@@ -272,18 +400,23 @@ export default function BookIssuesReturnsView({
       manualDueDate: durationPreset === 'manual' ? manualDate : null
     };
 
-    if (onIssueBook) {
-      onIssueBook(payload);
+    setIsSubmittingIssue(true);
+    try {
+      if (onIssueBook) {
+        await onIssueBook(payload);
+      }
+
+      // Set printable confirmation receipt
+      setIssuedSlip({
+        ...payload,
+        dueDate: calculatedDueDate,
+        issueDate: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+      });
+
+      if (onClearPrefilled) onClearPrefilled();
+    } finally {
+      setTimeout(() => setIsSubmittingIssue(false), 600);
     }
-
-    // Set printable confirmation receipt
-    setIssuedSlip({
-      ...payload,
-      dueDate: calculatedDueDate,
-      issueDate: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-    });
-
-    if (onClearPrefilled) onClearPrefilled();
   };
 
   // ==================== RETURN / RE-ISSUE DESK STATE ====================
@@ -391,8 +524,24 @@ export default function BookIssuesReturnsView({
     setSelectedReturnStudent({
       name: loan.patronName,
       pin_no: loan.patronId,
-      department: loan.department
+      department: loan.department,
+      photo: loan.patronPhoto || null
     });
+
+    if (loan.patronId) {
+      fetch(`/api/sdms/students/${encodeURIComponent(loan.patronId)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.student) {
+            setSelectedReturnStudent(prev => ({
+              ...prev,
+              ...data.student,
+              photo: data.student.photo || data.student.image || data.student.photo_url
+            }));
+          }
+        })
+        .catch(() => {});
+    }
   };
 
   const handleExecuteReturn = (targetLoan = null) => {
@@ -402,7 +551,7 @@ export default function BookIssuesReturnsView({
       return;
     }
     if (onReturnBook) {
-      onReturnBook(loan.id);
+      onReturnBook(loan.id || loan._id || loan.accession || loan.bookBarcode);
     }
     setSelectedLoanForReturn(null);
     setSelectedReturnStudent(null);
@@ -1029,19 +1178,19 @@ export default function BookIssuesReturnsView({
                         </div>
                       ) : (
                         <div className="p-4 bg-gradient-to-r from-blue-50/80 via-blue-50/40 to-white border border-blue-200 rounded-2xl text-xs flex items-center justify-between shadow-xs">
-                          <div className="flex items-center gap-3.5">
-                            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm shadow-blue-500/30">
-                              {selectedStudent.name.charAt(0).toUpperCase()}
-                            </div>
-                            <div>
-                              <div className="font-bold text-blue-950 text-sm flex items-center gap-2">
+                          <div className="flex items-center gap-4">
+                            <StudentSdmsPhoto student={selectedStudent} size="card" />
+                            <div className="space-y-1">
+                              <div className="font-bold text-blue-950 text-base flex items-center gap-2.5 flex-wrap">
                                 <span>{selectedStudent.name}</span>
-                                <span className="text-[11px] font-mono px-2 py-0.5 rounded-lg bg-blue-100 text-blue-800 font-bold">
+                                <span className="text-xs font-mono px-2.5 py-0.5 rounded-lg bg-blue-100 text-blue-800 font-bold border border-blue-200">
                                   PIN: {selectedStudent.pin_no || selectedStudent.rollNo}
                                 </span>
                               </div>
-                              <div className="text-[11px] text-slate-600 mt-0.5">
-                                {selectedStudent.department} {selectedStudent.year && <span>• {selectedStudent.year}</span>}
+                              <div className="text-xs text-slate-600 flex items-center gap-2">
+                                <span className="font-medium">{selectedStudent.department}</span>
+                                {selectedStudent.year && <span>• <strong className="text-blue-900">{selectedStudent.year}</strong></span>}
+                                {selectedStudent.semester && <span>• <span>{selectedStudent.semester}</span></span>}
                               </div>
                             </div>
                           </div>
@@ -1076,7 +1225,9 @@ export default function BookIssuesReturnsView({
                               onClick={() => handleSelectStudent(st)}
                               className="p-2.5 hover:bg-blue-50/80 rounded-xl cursor-pointer transition-colors flex items-center justify-between gap-3 text-xs"
                             >
-                              <div className="overflow-hidden">
+                              <div className="flex items-center gap-2.5 overflow-hidden">
+                                <StudentSdmsPhoto student={st} size="sm" />
+                                <div className="overflow-hidden">
                                 <div className="font-bold text-blue-950 truncate">{st.name}</div>
                                 <div className="text-[11px] text-slate-500 font-mono flex items-center gap-2 mt-0.5">
                                   <span className="text-blue-600 font-bold">{st.pin_no || st.rollNo}</span>
@@ -1084,6 +1235,7 @@ export default function BookIssuesReturnsView({
                                   <span className="truncate">{st.department}</span>
                                   {st.year && <span>• {st.year}</span>}
                                 </div>
+                              </div>
                               </div>
                               <span className="px-2.5 py-1 text-[11px] font-bold bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white border border-blue-200 rounded-lg transition-colors shrink-0">
                                 Select Student
@@ -1296,11 +1448,20 @@ export default function BookIssuesReturnsView({
                         </button>
                         <button
                           type="submit"
-                          disabled={!selectedBook || selectedBookStock <= 0 || !selectedStudent || selectedStudent?.status === 'Frozen'}
-                          className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-40 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-2 shadow-md shadow-blue-600/25 cursor-pointer"
+                          disabled={isSubmittingIssue || !selectedBook || selectedBookStock <= 0 || !selectedStudent || selectedStudent?.status === 'Frozen'}
+                          className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-40 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-2 shadow-md shadow-blue-600/25 cursor-pointer disabled:cursor-not-allowed"
                         >
-                          <Check className="w-4 h-4" />
-                          <span>Issue Book to Student</span>
+                          {isSubmittingIssue ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <span>Issuing Book...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Check className="w-4 h-4" />
+                              <span>Issue Book to Student</span>
+                            </>
+                          )}
                         </button>
                       </div>
                     </div>
@@ -1363,13 +1524,16 @@ export default function BookIssuesReturnsView({
                               onClick={() => handleSelectReturnStudent(st)}
                               className="p-2.5 hover:bg-blue-50/70 rounded-xl cursor-pointer transition-colors flex items-center justify-between gap-3 text-xs"
                             >
-                              <div className="overflow-hidden">
+                              <div className="flex items-center gap-2.5 overflow-hidden">
+                                <StudentSdmsPhoto student={st} size="sm" />
+                                <div className="overflow-hidden">
                                 <div className="font-bold text-zinc-900 truncate">{st.name}</div>
                                 <div className="text-[11px] text-zinc-500 font-mono flex items-center gap-2 mt-0.5">
                                   <span className="text-blue-600 font-semibold">{st.pin_no || st.rollNo}</span>
                                   <span>•</span>
                                   <span className="truncate">{st.department}</span>
                                 </div>
+                              </div>
                               </div>
                               <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-md border shrink-0 ${
                                 studentLoanCount > 0 
@@ -1388,10 +1552,8 @@ export default function BookIssuesReturnsView({
                   {/* Selected Return Student Badge */}
                   {selectedReturnStudent && (
                     <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl text-xs flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-bold flex items-center justify-center text-xs">
-                          {selectedReturnStudent.name.charAt(0).toUpperCase()}
-                        </div>
+                      <div className="flex items-center gap-3">
+                        <StudentSdmsPhoto student={selectedReturnStudent} size="md" />
                         <div>
                           <div className="font-bold text-zinc-900 flex items-center gap-1.5">
                             <span>{selectedReturnStudent.name}</span>
@@ -1441,12 +1603,15 @@ export default function BookIssuesReturnsView({
                             Accession: #{selectedLoanForReturn.accession || selectedLoanForReturn.bookBarcode}
                           </span>
                         </div>
-                        <div>
-                          <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Borrower</span>
-                          <span className="font-bold text-sm text-zinc-900 block mt-0.5">{selectedLoanForReturn.patronName}</span>
-                          <span className="font-mono text-[11px] text-blue-700 font-semibold mt-0.5 block">
-                            PIN: {selectedLoanForReturn.patronId} • {selectedLoanForReturn.department || 'General'}
-                          </span>
+                        <div className="flex items-center gap-4">
+                          <StudentSdmsPhoto student={selectedReturnStudent} size="card" />
+                          <div className="space-y-1">
+                            <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Borrower</span>
+                            <span className="font-bold text-base text-zinc-900 block">{selectedLoanForReturn.patronName}</span>
+                            <span className="font-mono text-xs text-blue-700 font-bold block">
+                              PIN: {selectedLoanForReturn.patronId} • {selectedLoanForReturn.department || 'General'}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
@@ -1896,7 +2061,7 @@ export default function BookIssuesReturnsView({
               />
             </div>
 
-            {/* Clean filter buttons: Active Loans, Overdue, Circulation History, and Issue/Return Logs */}
+            {/* Clean filter buttons: Issued Books, Overdue, Return History, and Activity Logs */}
             <div className="flex items-center border border-zinc-200 rounded-xl p-0.5 text-xs bg-zinc-50 flex-wrap">
               <button
                 type="button"
@@ -1905,7 +2070,7 @@ export default function BookIssuesReturnsView({
                   loanStatusFilter === 'active' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Active Loans ({activeLoans.length})
+                Issued Books ({activeLoans.length})
               </button>
               <button
                 type="button"
@@ -1914,7 +2079,7 @@ export default function BookIssuesReturnsView({
                   loanStatusFilter === 'overdue' ? 'bg-zinc-900 text-white shadow-xs' : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                Overdue ({overdueLoans.length})
+                Overdue Books ({overdueLoans.length})
               </button>
               <button
                 type="button"
@@ -1923,7 +2088,7 @@ export default function BookIssuesReturnsView({
                   loanStatusFilter === 'history' ? 'bg-zinc-900 text-white shadow-xs' : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                Circulation History ({returnedLoans.length})
+                Return History ({returnedLoans.length})
               </button>
               <button
                 type="button"
@@ -1933,7 +2098,7 @@ export default function BookIssuesReturnsView({
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
-                <span>Issue & Return Logs ({circulationLogs.length})</span>
+                <span>Activity Logs ({circulationLogs.length})</span>
               </button>
             </div>
           </div>
@@ -1950,11 +2115,11 @@ export default function BookIssuesReturnsView({
                   <thead>
                     <tr className="border-b border-zinc-200 bg-zinc-50/70 text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
                       <th className="py-3 px-3">Date & Time</th>
-                      <th className="py-3 px-3">Action Type</th>
-                      <th className="py-3 px-3">Book & Accession</th>
-                      <th className="py-3 px-3">Borrower (SDMS PIN)</th>
-                      <th className="py-3 px-3">Actor / Staff</th>
-                      <th className="py-3 px-3">Operational Status & Details</th>
+                      <th className="py-3 px-3">Action</th>
+                      <th className="py-3 px-3">Book & Number</th>
+                      <th className="py-3 px-3">Student (Roll No)</th>
+                      <th className="py-3 px-3">Staff</th>
+                      <th className="py-3 px-3">Details</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100">
@@ -1963,7 +2128,19 @@ export default function BookIssuesReturnsView({
                       const isBulk = log.action.includes('BULK');
                       const isRenew = log.action.includes('RENEW');
                       return (
-                        <tr key={log.id || idx} className="hover:bg-blue-50/30 transition-colors">
+                        <tr 
+                          key={log.id || idx} 
+                          onClick={() => handleInspectLoan({
+                            ...log,
+                            id: log.id || idx,
+                            bookBarcode: log.accession,
+                            status: log.action.includes('RETURN') ? 'Returned' : 'Borrowed',
+                            issueDateFormatted: log.timestamp,
+                            returnedDateFormatted: log.action.includes('RETURN') ? log.timestamp : null
+                          })}
+                          className="hover:bg-blue-50/70 transition-colors cursor-pointer group"
+                          title="Click row to inspect book issue details"
+                        >
                           <td className="py-3.5 px-3 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
                             {log.timestamp}
                           </td>
@@ -1983,14 +2160,14 @@ export default function BookIssuesReturnsView({
                           <td className="py-3.5 px-3">
                             <div className="font-bold text-zinc-900">{log.bookTitle}</div>
                             <span className="font-mono text-[10px] text-zinc-500 font-medium">
-                              Acc: {log.accession}
+                              Book No: #{getSingleBookNumber(log.accession)}
                             </span>
                           </td>
                           <td className="py-3.5 px-3">
                             <div className="font-bold text-zinc-900">{log.patronName}</div>
                             <div className="flex items-center gap-1.5 mt-0.5">
                               <span className="font-mono text-[11px] text-blue-700 font-bold">
-                                PIN: {log.patronId}
+                                Roll No: {log.patronId}
                               </span>
                             </div>
                           </td>
@@ -2010,35 +2187,40 @@ export default function BookIssuesReturnsView({
           ) : (
             filteredLoans.length === 0 ? (
               <div className="py-16 text-center text-xs text-zinc-400 border-t border-zinc-100">
-                No circulation records match your filter criteria.
+                No issued books match your search.
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-zinc-200 bg-zinc-50/70 text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
-                      <th className="py-3 px-3">Book Title & Accession</th>
-                      <th className="py-3 px-3">Student Name & SDMS PIN</th>
+                      <th className="py-3 px-3">Book Title & Number</th>
+                      <th className="py-3 px-3">Student Name & Roll No</th>
                       <th className="py-3 px-3">Department</th>
                       <th className="py-3 px-3">Issue Date</th>
-                      <th className="py-3 px-3">Expected Due Date</th>
-                      <th className="py-3 px-3">Actual Return Date</th>
+                      <th className="py-3 px-3">Due Date</th>
+                      <th className="py-3 px-3">Return Date</th>
                       <th className="py-3 px-3 text-center">Status</th>
-                      <th className="py-3 px-3 text-right">Desk Actions</th>
+                      <th className="py-3 px-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100">
                     {filteredLoans.map(loan => {
                       const isOverdue = loan.status === 'Overdue';
                       const isReturned = loan.status === 'Returned';
-                      const actualReturnFormatted = loan.returnDateFormatted || (loan.returnDate ? new Date(loan.returnDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : null);
+                      const actualReturnFormatted = getFormattedReturnDate(loan);
 
                       return (
-                        <tr key={loan.id} className="hover:bg-blue-50/30 transition-colors">
+                        <tr 
+                          key={loan.id} 
+                          onClick={() => handleInspectLoan(loan)}
+                          className="hover:bg-blue-50/70 transition-colors cursor-pointer group"
+                          title="Click row to inspect book issue details"
+                        >
                           <td className="py-3.5 px-3">
                             <div className="font-bold text-zinc-900">{loan.bookTitle}</div>
                             <span className="font-mono text-[10px] text-zinc-500 font-medium">
-                              Acc: {loan.accession || loan.bookBarcode}
+                              Book No: #{getSingleBookNumber(loan.accession || loan.bookBarcode)}
                             </span>
                           </td>
 
@@ -2046,10 +2228,7 @@ export default function BookIssuesReturnsView({
                             <div className="font-bold text-zinc-900">{loan.patronName}</div>
                             <div className="flex items-center gap-1.5 mt-0.5">
                               <span className="font-mono text-[11px] text-blue-700 font-bold">
-                                PIN: {loan.patronId}
-                              </span>
-                              <span className="px-1 py-0.2 rounded text-[9px] bg-blue-50 text-blue-600 border border-blue-200 font-medium">
-                                SDMS
+                                Roll No: {loan.patronId}
                               </span>
                             </div>
                           </td>
@@ -2063,28 +2242,28 @@ export default function BookIssuesReturnsView({
                             {loan.issueDateFormatted || loan.issueDate || 'Standard'}
                           </td>
 
-                          {/* 2. EXPECTED DUE DATE */}
+                          {/* 2. DUE DATE */}
                           <td className="py-3.5 px-3">
                             <div className="font-semibold text-zinc-900 font-mono text-[11px]">
                               {loan.dueDateFormatted || loan.dueDate}
                             </div>
                             {isOverdue && !isReturned ? (
-                              <span className="text-[10px] text-rose-600 font-bold block mt-0.5">Penalty Accruing</span>
+                              <span className="text-[10px] text-rose-600 font-bold block mt-0.5">Overdue</span>
                             ) : !isReturned ? (
-                              <span className="text-[10px] text-emerald-600 font-medium block mt-0.5">Active Loan Window</span>
+                              <span className="text-[10px] text-emerald-600 font-medium block mt-0.5">Issued</span>
                             ) : null}
                           </td>
 
-                          {/* 3. ACTUAL RETURN DATE (DISTINCT COLUMN) */}
+                          {/* 3. RETURN DATE */}
                           <td className="py-3.5 px-3">
                             {isReturned ? (
                               <div>
-                                <div className="font-bold text-emerald-800 flex items-center gap-1 font-mono text-[11px]">
+                                <div className="font-bold text-emerald-800 flex items-center gap-1.5 font-mono text-[11px]">
                                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                  <span>{actualReturnFormatted || 'Returned'}</span>
+                                  <span className="text-emerald-950 font-bold">{actualReturnFormatted}</span>
                                 </div>
                                 <span className="text-[10px] text-teal-700 font-medium block mt-0.5">
-                                  Reshelved in Catalog
+                                  Returned to Library
                                 </span>
                               </div>
                             ) : (
@@ -2111,13 +2290,13 @@ export default function BookIssuesReturnsView({
                               {isReturned ? (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700 bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-200">
                                   <Check className="w-3.5 h-3.5 text-teal-600" />
-                                  <span>Returned & Reshelved</span>
+                                  <span>Returned</span>
                                 </span>
                               ) : (
                                 <>
                                   <button
                                     type="button"
-                                    onClick={() => handleExecuteReturn(loan)}
+                                    onClick={(e) => { e.stopPropagation(); handleExecuteReturn(loan); }}
                                     className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
                                     title="Process book return"
                                   >
@@ -2127,12 +2306,12 @@ export default function BookIssuesReturnsView({
 
                                   <button
                                     type="button"
-                                    onClick={() => handleExecuteReissue(loan)}
+                                    onClick={(e) => { e.stopPropagation(); handleExecuteReissue(loan); }}
                                     className="px-3 py-1.5 bg-white border border-zinc-200 hover:bg-zinc-100 text-zinc-800 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 shadow-xs"
-                                    title="Re-issue / Extend loan window by 15 days"
+                                    title="Extend return date by 15 days"
                                   >
                                     <RefreshCw className="w-3 h-3 text-blue-600" />
-                                    <span>Re-issue</span>
+                                    <span>Renew</span>
                                   </button>
                                 </>
                               )}
@@ -2148,6 +2327,233 @@ export default function BookIssuesReturnsView({
           )}
         </div>
       </div>
+
+      {/* 3. Book Issue Details Popup Dialog */}
+      {inspectingLoan && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setInspectingLoan(null);
+              setInspectingStudent(null);
+            }
+          }}
+        >
+          <div className="bg-white border border-blue-200/90 rounded-3xl shadow-2xl p-6 sm:p-8 w-full max-w-2xl max-h-[92vh] overflow-y-auto relative animate-in zoom-in-95 duration-200 space-y-6">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-blue-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-700 flex items-center justify-center border border-blue-200 shadow-xs">
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-blue-950">Book Issue Details</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Student & Book Information • Book No: #{getSingleBookNumber(inspectingLoan.accession || inspectingLoan.bookBarcode)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className={`px-3 py-1 rounded-xl text-xs font-bold border ${
+                  inspectingLoan.status === 'Overdue'
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : inspectingLoan.status === 'Returned'
+                    ? 'bg-teal-50 text-teal-700 border-teal-200'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                }`}>
+                  {inspectingLoan.status === 'Returned' ? 'Returned to Library' : inspectingLoan.status}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInspectingLoan(null);
+                    setInspectingStudent(null);
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Borrower Card with enlarged SDMS Photo */}
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-50/80 via-blue-50/40 to-white border border-blue-200 rounded-2xl flex items-center justify-between gap-4 shadow-xs">
+              <div className="flex items-center gap-4">
+                <StudentSdmsPhoto 
+                  student={inspectingStudent || {
+                    name: inspectingLoan.patronName,
+                    pin_no: inspectingLoan.patronId,
+                    department: inspectingLoan.department,
+                    photo: inspectingLoan.patronPhoto
+                  }} 
+                  size="card" 
+                />
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
+                    Student Details
+                  </span>
+                  <div className="font-bold text-blue-950 text-base flex items-center gap-2.5 flex-wrap">
+                    <span>{inspectingLoan.patronName}</span>
+                    <span className="text-xs font-mono px-2.5 py-0.5 rounded-lg bg-blue-100 text-blue-800 font-bold border border-blue-200">
+                      Roll No / PIN: {inspectingLoan.patronId}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
+                    <span>{inspectingStudent?.department || inspectingLoan.department || 'General'}</span>
+                    {inspectingStudent?.year && <span>• <strong>{inspectingStudent.year}</strong></span>}
+                    {inspectingStudent?.semester && <span>• {inspectingStudent.semester}</span>}
+                  </div>
+                  {inspectingStudent?.email && (
+                    <div className="text-[11px] text-slate-400 font-mono">
+                      {inspectingStudent.email}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="hidden sm:flex flex-col items-end gap-1 shrink-0">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  Verified Student
+                </span>
+                <span className="text-[10px] text-slate-400">College Database</span>
+              </div>
+            </div>
+
+            {/* Book Information */}
+            <div className="border border-blue-100 rounded-2xl p-4 sm:p-5 bg-white space-y-3 shadow-xs">
+              <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
+                Book Details
+              </span>
+
+              <div className="grid sm:grid-cols-2 gap-4 text-xs">
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Title</span>
+                  <strong className="text-sm text-slate-900 block mt-0.5">{inspectingLoan.bookTitle}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Book Number</span>
+                  <strong className="font-mono text-sm text-blue-700 block mt-0.5">
+                    #{getSingleBookNumber(inspectingLoan.accession || inspectingLoan.bookBarcode)}
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Shelf Location</span>
+                  <span className="font-medium text-slate-700 block mt-0.5">
+                    {inspectingLoan.shelf || 'Central Stack'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Category</span>
+                  <span className="font-medium text-slate-700 block mt-0.5">
+                    {inspectingLoan.category || 'General Catalog'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Issue & Return Dates */}
+            <div className="border border-blue-100 rounded-2xl p-4 sm:p-5 bg-slate-50/50 space-y-3 text-xs">
+              <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
+                Issue & Return Dates
+              </span>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                  <span className="text-slate-400 text-[10px] uppercase font-bold block">Issue Date</span>
+                  <strong className="text-xs text-slate-900 font-mono block mt-1">
+                    {inspectingLoan.issueDateFormatted || inspectingLoan.issueDate || 'Standard'}
+                  </strong>
+                </div>
+
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                  <span className="text-slate-400 text-[10px] uppercase font-bold block">Due Date</span>
+                  <strong className={`text-xs font-mono block mt-1 ${
+                    inspectingLoan.status === 'Overdue' && inspectingLoan.status !== 'Returned'
+                      ? 'text-rose-600 font-bold'
+                      : 'text-slate-900'
+                  }`}>
+                    {inspectingLoan.dueDateFormatted || inspectingLoan.dueDate}
+                  </strong>
+                </div>
+
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 col-span-2 sm:col-span-1">
+                  <span className="text-slate-400 text-[10px] uppercase font-bold block">Return Date</span>
+                  {inspectingLoan.status === 'Returned' ? (
+                    <strong className="text-xs text-emerald-700 font-mono block mt-1 flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" />
+                      {getFormattedReturnDate(inspectingLoan)}
+                    </strong>
+                  ) : (
+                    <span className="text-xs text-blue-600 font-medium block mt-1">
+                      Issued (Not Returned Yet)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions Footer */}
+            <div className="pt-2 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setInspectingLoan(null);
+                  setInspectingStudent(null);
+                }}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+
+              <div className="flex items-center gap-2">
+                {inspectingLoan.status !== 'Returned' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleExecuteReissue(inspectingLoan);
+                        setInspectingLoan(null);
+                        setInspectingStudent(null);
+                      }}
+                      className="px-4 py-2 bg-white border border-blue-200 hover:bg-blue-50 text-blue-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Renew (+15 Days)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleExecuteReturn(inspectingLoan);
+                        setInspectingLoan(null);
+                        setInspectingStudent(null);
+                      }}
+                      className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Return Book</span>
+                    </button>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => handlePrintSlip(inspectingLoan)}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Print receipt"
+                >
+                  <Printer className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Print Receipt</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

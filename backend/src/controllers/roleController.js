@@ -1,3 +1,4 @@
+const hrmsService = require('../services/hrmsService');
 const mongoose = require('mongoose');
 const Role = require('../models/Role');
 const User = require('../models/User');
@@ -30,43 +31,6 @@ async function ensureSeedRoles() {
         permissions: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns', 'user_management', 'settings']
       });
       console.log('🛡️ Ensured root Superadmin role exists in database');
-    }
-
-    // Ensure standard operational roles exist for clear assignment
-    const librarian = await Role.findOne({ name: { $regex: /^librarian$/i } });
-    if (!librarian) {
-      await Role.create({
-        name: 'Librarian',
-        description: 'Catalog management, book creation, circulation desk and lending operations',
-        color: 'blue',
-        is_system: false,
-        permissions: ['dashboard', 'book_creation', 'all_books', 'book_issues_returns']
-      });
-      console.log('📚 Ensured standard Librarian role exists in database');
-    }
-
-    const circStaff = await Role.findOne({ name: { $regex: /^circulation staff$/i } });
-    if (!circStaff) {
-      await Role.create({
-        name: 'Circulation Staff',
-        description: 'Student verification, 30-day lending window, returns and fine assessment',
-        color: 'emerald',
-        is_system: false,
-        permissions: ['dashboard', 'all_books', 'book_issues_returns']
-      });
-      console.log('🔄 Ensured standard Circulation Staff role exists in database');
-    }
-
-    const cataloger = await Role.findOne({ name: { $regex: /^catalog assistant$/i } });
-    if (!cataloger) {
-      await Role.create({
-        name: 'Catalog Assistant',
-        description: 'Book holdings registration, barcode generation, and accessioning',
-        color: 'purple',
-        is_system: false,
-        permissions: ['dashboard', 'book_creation', 'all_books']
-      });
-      console.log('🏷️ Ensured standard Catalog Assistant role exists in database');
     }
 
     superadminSeeded = true;
@@ -181,8 +145,10 @@ async function updateRole(req, res) {
       return res.status(404).json({ error: 'Role not found' });
     }
 
-    const oldName = role.name;
     const isSuperadmin = role.name.toLowerCase() === 'superadmin' || role.is_system;
+    if (isSuperadmin) {
+      return res.status(403).json({ error: 'Superadmin role is protected and cannot be edited.' });
+    }
 
     if (name && !isSuperadmin) {
       const cleanName = name.trim();
@@ -291,92 +257,51 @@ async function deleteRole(req, res) {
 // Assign Role and Page Privileges to an HRMS User (without storing user records locally)
 async function assignRoleToHrmsUser(req, res) {
   try {
-    const { emp_no, role_name, employee_name, department, division, email, page_privileges } = req.body || {};
+    const { emp_no, role_name, page_privileges } = req.body || {};
 
     if (!emp_no || !role_name) {
       return res.status(400).json({ error: 'emp_no and role_name are required' });
     }
 
     const cleanEmpNo = String(emp_no).trim();
+
+    if (cleanEmpNo.toLowerCase() === 'superadmin') {
+      return res.status(403).json({ error: 'Superadmin privileges are permanent and cannot be edited.' });
+    }
     const cleanRoleName = String(role_name).trim();
+
+    if (cleanEmpNo.toLowerCase() === 'superadmin') {
+      return res.status(403).json({ error: 'Superadmin account is protected and cannot be edited.' });
+    }
+
+    // Verify employee exists in live HRMS database
+    const hrmsEmp = await hrmsService.getEmployeeByEmpNo(cleanEmpNo);
+    if (!hrmsEmp && cleanEmpNo.toLowerCase() !== 'superadmin') {
+      return res.status(404).json({ error: `Cannot assign role: Employee #${cleanEmpNo} not found in HRMS database.` });
+    }
 
     // Verify role exists in Role collection
     const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${cleanRoleName}$`, 'i') } });
-
-    // Role default page privileges
     const roleDefaultPages = roleDoc ? roleDoc.permissions : ['dashboard', 'all_books'];
     const assignedPages = Array.isArray(page_privileges) && page_privileges.length > 0 
       ? page_privileges 
       : roleDefaultPages;
 
-    let assignment = await HrmsUserRole.findOne({ emp_no: cleanEmpNo });
-    if (assignment) {
-      assignment.role_name = roleDoc ? roleDoc.name : cleanRoleName;
-      assignment.employee_name = employee_name || assignment.employee_name || '';
-      assignment.department = department || assignment.department || '';
-      assignment.division = division || assignment.division || '';
-      if (email) assignment.email = email.trim().toLowerCase();
-      assignment.page_privileges = assignedPages;
-      assignment.assigned_by = req.user?.fullName || 'Superadmin';
-      assignment.assigned_at = new Date();
-      await assignment.save();
-    } else {
-      assignment = await HrmsUserRole.create({
+    // Only store mapping in HrmsUserRole - DO NOT store passwords or duplicate employee records locally
+    const assignment = await HrmsUserRole.findOneAndUpdate(
+      { emp_no: cleanEmpNo },
+      {
         emp_no: cleanEmpNo,
-        employee_name: employee_name || '',
-        department: department || '',
-        division: division || '',
-        email: email ? email.trim().toLowerCase() : '',
         role_name: roleDoc ? roleDoc.name : cleanRoleName,
         page_privileges: assignedPages,
-        assigned_by: req.user?.fullName || 'Superadmin'
-      });
-    }
-
-    // Also sync/upsert into User directory so login & circulation recognize this account
-    try {
-      const isSuper = cleanRoleName.toLowerCase() === 'superadmin';
-      const defaultHash = await bcrypt.hash('superadmin123', 10);
-      const userEmail = email ? email.trim().toLowerCase() : `${cleanEmpNo.toLowerCase()}@pydah.edu.in`;
-      let userDoc = await User.findOne({
-        $or: [
-          { username: cleanEmpNo.toLowerCase() },
-          { patron_id: cleanEmpNo },
-          { email: userEmail }
-        ]
-      });
-
-      if (!userDoc) {
-        userDoc = new User({
-          username: cleanEmpNo.toLowerCase(),
-          full_name: employee_name || `Employee #${cleanEmpNo}`,
-          email: userEmail,
-          role: roleDoc ? roleDoc.name : cleanRoleName,
-          role_id: isSuper ? 1 : 2,
-          patron_id: cleanEmpNo,
-          department: department || 'General',
-          division: division || '',
-          status: 'Active',
-          permissions: assignedPages,
-          password: defaultHash
-        });
-      } else {
-        userDoc.username = cleanEmpNo.toLowerCase();
-        userDoc.full_name = employee_name || userDoc.full_name;
-        userDoc.role = roleDoc ? roleDoc.name : cleanRoleName;
-        userDoc.role_id = isSuper ? 1 : 2;
-        userDoc.patron_id = cleanEmpNo;
-        userDoc.department = department || userDoc.department;
-        userDoc.division = division || userDoc.division;
-        userDoc.email = userEmail;
-        userDoc.status = 'Active';
-        userDoc.permissions = assignedPages;
-        if (!userDoc.password) userDoc.password = defaultHash;
-      }
-      await userDoc.save();
-    } catch (upsertErr) {
-      console.warn('Could not sync user to Mongo users collection:', upsertErr.message);
-    }
+        employee_name: hrmsEmp?.name || '',
+        department: hrmsEmp?.department || '',
+        division: hrmsEmp?.division || '',
+        assigned_by: req.user?.fullName || 'Superadmin',
+        assigned_at: new Date()
+      },
+      { upsert: true, new: true }
+    );
 
     logAudit({
       actor_id: req.user?.userId || 'SUPERADMIN',
@@ -405,6 +330,10 @@ async function setUserPagePrivilegeOverride(req, res) {
     }
 
     const cleanEmpNo = String(emp_no).trim();
+
+    if (cleanEmpNo.toLowerCase() === 'superadmin') {
+      return res.status(403).json({ error: 'Superadmin privileges are permanent and cannot be edited.' });
+    }
 
     let assignment = await HrmsUserRole.findOne({ emp_no: cleanEmpNo });
     if (!assignment) {
@@ -459,26 +388,33 @@ async function getHrmsUserRoles(req, res) {
   try {
     const assignments = await HrmsUserRole.find().sort({ assigned_at: -1 }).lean();
     const map = {};
-    const users = assignments.map(a => {
+
+    // Fetch live employee details directly from HRMS for each assigned user
+    const users = await Promise.all(assignments.map(async (a) => {
       map[a.emp_no] = {
         role_name: a.role_name,
         page_privileges: a.page_privileges || [],
         assigned_by: a.assigned_by,
         assigned_at: a.assigned_at
       };
+
+      // Query live HRMS profile
+      const hrmsEmp = await hrmsService.getEmployeeByEmpNo(a.emp_no).catch(() => null);
+
       return {
         id: a._id.toString(),
         emp_no: a.emp_no,
-        name: a.employee_name || `Employee #${a.emp_no}`,
-        department: a.department || 'General',
-        division: a.division || '',
-        email: a.email || `${String(a.emp_no).toLowerCase()}@pydah.edu.in`,
+        name: hrmsEmp?.name || a.employee_name || `Employee #${a.emp_no}`,
+        department: hrmsEmp?.department || a.department || 'General',
+        division: hrmsEmp?.division || a.division || '',
+        email: hrmsEmp?.email || a.email || '',
         role: a.role_name,
         page_privileges: a.page_privileges || [],
         assigned_by: a.assigned_by,
-        assigned_at: a.assigned_at
+        assigned_at: a.assigned_at,
+        source: 'HRMS Live Direct'
       };
-    });
+    }));
 
     res.json({
       total: assignments.length,

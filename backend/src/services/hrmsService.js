@@ -1,3 +1,4 @@
+const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 
 const hrmsUri = process.env.HRMS_MONGODB_URI || process.env.MONGODB_URI || 'mongodb+srv://teampydah:TeamPydah@teampydah.y4zj6wh.mongodb.net/hrms';
@@ -144,7 +145,7 @@ async function getEmployees({ search = '', department = '', division = '', statu
         emp_no: e.emp_no,
         name: e.employee_name,
         employee_name: e.employee_name,
-        email: e.email || `${e.emp_no.toLowerCase()}@pydah.edu.in`,
+        email: e.email ? String(e.email).trim() : '',
         phone: e.phone_number || '',
         gender: e.gender || 'Not specified',
         department: deptName,
@@ -195,7 +196,7 @@ async function getEmployeeByEmpNo(empNo) {
       emp_no: employee.emp_no,
       name: employee.employee_name,
       employee_name: employee.employee_name,
-      email: employee.email || `${employee.emp_no.toLowerCase()}@pydah.edu.in`,
+      email: employee.email ? String(employee.email).trim() : '',
       phone: employee.phone_number || '',
       gender: employee.gender || 'Not specified',
       department: deptName,
@@ -209,7 +210,101 @@ async function getEmployeeByEmpNo(empNo) {
   }
 }
 
+
+async function verifyHrmsCredentials(identifier, password) {
+  try {
+    const conn = getHrmsConnection();
+    await conn.asPromise();
+    const cleanId = String(identifier || '').trim();
+    const lowerId = cleanId.toLowerCase();
+    const deptMap = await getDepartmentMap();
+    const divMap = await getDivisionMap();
+
+    // 1. Check in HRMS employees collection
+    let emp = await conn.db.collection('employees').findOne({
+      $or: [
+        { emp_no: cleanId },
+        { emp_no: lowerId },
+        { email: lowerId },
+        { email: cleanId }
+      ]
+    });
+
+    // 2. Check in HRMS users collection if not found in employees
+    let hrmsUser = null;
+    if (!emp) {
+      hrmsUser = await conn.db.collection('users').findOne({
+        $or: [
+          { employeeId: cleanId },
+          { email: lowerId },
+          { email: cleanId }
+        ]
+      });
+      if (hrmsUser && hrmsUser.employeeId) {
+        emp = await conn.db.collection('employees').findOne({
+          emp_no: hrmsUser.employeeId
+        });
+      }
+    }
+
+    if (!emp && !hrmsUser) {
+      return { success: false, error: `No employee account found in HRMS matching "${cleanId}". Please check your HRMS Employee ID or Institutional Email.` };
+    }
+
+    const target = emp || hrmsUser;
+    if (target.is_active === false || target.isActive === false) {
+      return { success: false, error: 'This HRMS employee account is inactive or disabled.' };
+    }
+
+    // 3. Verify password directly against HRMS password fields
+    let isMatch = false;
+    const bcryptHash = target.password || hrmsUser?.password;
+    const plainPwd = target.plain_password || hrmsUser?.plain_password;
+
+    if (bcryptHash && typeof bcryptHash === 'string' && bcryptHash.startsWith('$2')) {
+      try {
+        isMatch = await bcrypt.compare(password, bcryptHash);
+      } catch (_) {}
+    }
+    if (!isMatch && plainPwd) {
+      isMatch = (plainPwd === password);
+    }
+
+    // If password is not configured in HRMS, allow employee ID
+    if (!isMatch && !bcryptHash && !plainPwd && password === String(target.emp_no || target.employeeId)) {
+      isMatch = true;
+    }
+
+    if (!isMatch) {
+      return { success: false, error: 'Invalid password. Please enter your valid HRMS password.' };
+    }
+
+    const empNo = emp?.emp_no || hrmsUser?.employeeId || cleanId;
+    const empName = emp?.employee_name || hrmsUser?.name || `Employee #${empNo}`;
+    const deptName = (emp?.department_id && deptMap[emp.department_id.toString()]) || 'General';
+    const divName = (emp?.division_id && divMap[emp.division_id.toString()]) || '';
+    const email = emp?.email || hrmsUser?.email || '';
+
+    return {
+      success: true,
+      employee: {
+        emp_no: empNo,
+        name: empName,
+        department: deptName,
+        division: divName,
+        email,
+        source: 'HRMS Live Direct'
+      }
+    };
+  } catch (err) {
+    console.error('Error verifying HRMS credentials:', err.message);
+    return { success: false, error: 'Failed to connect to HRMS database: ' + err.message };
+  }
+}
+
+
 module.exports = {
+  verifyHrmsCredentials,
   getHrmsConnection,
   getEmployees,
   getDepartments,
