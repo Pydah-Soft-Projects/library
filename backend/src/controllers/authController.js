@@ -32,82 +32,100 @@ async function login(req, res) {
       return res.status(400).json({ error: 'Password is required to authenticate.' });
     }
 
+    // 1. First, verify whether the user is present in our database (User collection or HrmsUserRole)
+    const dbUser = await User.findOne({
+      $or: [
+        { username: loginInput },
+        { username: rawInput },
+        { email: loginInput },
+        { patron_id: rawInput },
+        { patron_id: loginInput.toUpperCase() }
+      ]
+    });
+
+    const hrmsAssignment = await HrmsUserRole.findOne({
+      $or: [
+        { emp_no: rawInput },
+        { emp_no: loginInput },
+        { emp_no: loginInput.toUpperCase() },
+        { email: loginInput }
+      ]
+    }).lean();
+
+    // If user is NOT present in our database, reject immediately without checking HRMS
+    if (!dbUser && !hrmsAssignment) {
+      return res.status(401).json({
+        error: 'User account is not registered in the library database. Please contact library administration to grant portal access.'
+      });
+    }
+
     let authenticatedUser = null;
     let authSource = null;
 
-    // 1. Direct HRMS Live Authentication
-    const hrmsAuth = await hrmsService.verifyHrmsCredentials(rawInput, password).catch(() => ({ success: false }));
-    if (hrmsAuth && hrmsAuth.success) {
-      const emp = hrmsAuth.employee;
-
-      // Resolve Library Page Privileges & Assigned Role from HrmsUserRole
-      const assignment = await HrmsUserRole.findOne({ emp_no: emp.emp_no }).lean();
-      let roleName = assignment?.role_name;
-      let permissions = assignment?.page_privileges;
-
-      if (!roleName) {
-        const defaultRole = await Role.findOne({ is_system: false }).sort({ created_at: 1 }).lean();
-        roleName = defaultRole?.name || 'Librarian';
-        permissions = defaultRole?.permissions || ['dashboard', 'all_books'];
+    // 2. If the user has a local database password (e.g. system administrator / superadmin), verify bcrypt password
+    if (dbUser && dbUser.password) {
+      const isPasswordMatch = await bcrypt.compare(password, dbUser.password);
+      if (isPasswordMatch) {
+        const isSuperadmin = (dbUser.role || '').toLowerCase().trim() === 'superadmin';
+        authenticatedUser = {
+          id: dbUser._id.toString(),
+          emp_no: dbUser.patron_id || dbUser.username,
+          username: dbUser.username,
+          full_name: dbUser.full_name,
+          email: dbUser.email,
+          role: dbUser.role || (isSuperadmin ? 'Superadmin' : 'Librarian'),
+          department: dbUser.department || 'Governance & Administration',
+          division: 'Administration',
+          status: dbUser.status || 'Active',
+          permissions: isSuperadmin ? ALL_PAGE_PRIVILEGES : (dbUser.permissions || ['dashboard', 'all_books']),
+          source: 'Database User'
+        };
+        authSource = 'Database';
       }
-
-      if (!permissions || permissions.length === 0) {
-        const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${roleName}$`, 'i') } }).lean();
-        permissions = roleDoc?.permissions || ['dashboard', 'all_books'];
-      }
-
-      authenticatedUser = {
-        id: emp.emp_no,
-        emp_no: emp.emp_no,
-        username: emp.emp_no,
-        full_name: emp.name,
-        email: emp.email,
-        role: roleName,
-        department: emp.department,
-        division: emp.division,
-        status: 'Active',
-        permissions,
-        source: 'HRMS Live Direct Authentication'
-      };
-      authSource = 'HRMS';
     }
 
-    // 2. Local Database Authentication (e.g. system administrator / superadmin with bcrypt password)
-    if (!authenticatedUser) {
-      const dbUser = await User.findOne({
-        $or: [
-          { username: loginInput },
-          { username: rawInput },
-          { email: loginInput },
-          { patron_id: rawInput },
-          { patron_id: loginInput.toUpperCase() }
-        ]
-      });
+    // 3. If present in our database (assigned via HrmsUserRole or HRMS-backed user), verify password in HRMS
+    if (!authenticatedUser && (hrmsAssignment || dbUser)) {
+      const empNoToCheck = hrmsAssignment?.emp_no || dbUser?.patron_id || dbUser?.username || rawInput;
+      const hrmsAuth = await hrmsService.verifyHrmsCredentials(empNoToCheck, password).catch(() => ({ success: false }));
 
-      if (dbUser && dbUser.password) {
-        const isPasswordMatch = await bcrypt.compare(password, dbUser.password);
-        if (isPasswordMatch) {
-          const isSuperadmin = (dbUser.role || '').toLowerCase().trim() === 'superadmin';
-          authenticatedUser = {
-            id: dbUser._id.toString(),
-            emp_no: dbUser.patron_id || dbUser.username,
-            username: dbUser.username,
-            full_name: dbUser.full_name,
-            email: dbUser.email,
-            role: dbUser.role || (isSuperadmin ? 'Superadmin' : 'Librarian'),
-            department: dbUser.department || 'Governance & Administration',
-            division: 'Administration',
-            status: dbUser.status || 'Active',
-            permissions: isSuperadmin ? ALL_PAGE_PRIVILEGES : (dbUser.permissions || ['dashboard', 'all_books']),
-            source: 'Database User'
-          };
-          authSource = 'Database';
+      if (hrmsAuth && hrmsAuth.success) {
+        const emp = hrmsAuth.employee;
+
+        // Resolve Library Page Privileges & Assigned Role from database assignment
+        let roleName = hrmsAssignment?.role_name || dbUser?.role;
+        let permissions = hrmsAssignment?.page_privileges || dbUser?.permissions;
+
+        if (!roleName) {
+          const defaultRole = await Role.findOne({ is_system: false }).sort({ created_at: 1 }).lean();
+          roleName = defaultRole?.name || 'Librarian';
+          permissions = defaultRole?.permissions || ['dashboard', 'all_books'];
         }
+
+        if (!permissions || permissions.length === 0) {
+          const roleDoc = await Role.findOne({ name: { $regex: new RegExp(`^${roleName}$`, 'i') } }).lean();
+          permissions = roleDoc?.permissions || ['dashboard', 'all_books'];
+        }
+
+        authenticatedUser = {
+          id: emp.emp_no,
+          emp_no: emp.emp_no,
+          username: emp.emp_no,
+          full_name: emp.name || hrmsAssignment?.employee_name || dbUser?.full_name,
+          email: emp.email || hrmsAssignment?.email || dbUser?.email,
+          role: roleName,
+          department: emp.department || hrmsAssignment?.department || dbUser?.department,
+          division: emp.division || hrmsAssignment?.division,
+          status: 'Active',
+          permissions,
+          source: 'HRMS Live Direct Authentication'
+        };
+        authSource = 'HRMS';
       }
     }
 
     if (!authenticatedUser) {
-      return res.status(401).json({ error: 'Invalid credentials. Please verify your username / employee ID and password.' });
+      return res.status(401).json({ error: 'Invalid password. Please check your credentials and try again.' });
     }
 
     // 3. Construct Standard JWT Payload
