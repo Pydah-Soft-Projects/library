@@ -89,28 +89,28 @@ export default function DashboardView({
         <div className="flex items-center gap-2.5 self-start sm:self-auto">
           <button
             onClick={() => onNavigate('book_creation')}
-            className="px-4 py-2 bg-zinc-950 hover:bg-black text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>Create Book</span>
           </button>
           <button
             onClick={() => onNavigate('book_issues_returns')}
-            className="px-4 py-2 border-2 border-zinc-900 hover:bg-zinc-100 text-zinc-950 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            className="px-4 py-2 border-2 border-blue-600 text-blue-600 hover:bg-blue-50 text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
           >
-            <ArrowLeftRight className="w-3.5 h-3.5 stroke-[2.5] text-zinc-900" />
+            <ArrowLeftRight className="w-3.5 h-3.5 stroke-[2.5] text-blue-600" />
             <span>Issues & Returns</span>
           </button>
         </div>
       </div>
 
       {/* Bold Dark Themed Metric Strip */}
-      <div className="border-t-2 border-b-2 border-zinc-300 divide-y sm:divide-y-0 sm:divide-x-2 divide-zinc-200 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 py-2 bg-zinc-100/70">
+      <div className="border-t-2 border-b-2 border-zinc-300 divide-y sm:divide-y-0 sm:divide-x-2 divide-zinc-200 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 py-2 bg-zinc-100">
         {metrics.map((m, i) => (
           <div
             key={i}
             onClick={() => onNavigate(m.tab)}
-            className="p-4 cursor-pointer hover:bg-zinc-200/60 transition-colors flex flex-col justify-between"
+            className="p-4 cursor-pointer hover:bg-zinc-200 transition-colors flex flex-col justify-between"
           >
             <span className="text-xs font-black text-zinc-900 uppercase tracking-wider block mb-1.5">
               {m.label}
@@ -131,12 +131,12 @@ export default function DashboardView({
       <div className="space-y-4 pt-2">
         <div className="flex items-center justify-between pb-2 border-b-2 border-zinc-200">
           <h2 className="text-sm font-black text-zinc-950 uppercase tracking-wider flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-zinc-950"></span>
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
             <span>Active Circulations ({activeLoans.length})</span>
           </h2>
           <button
             onClick={() => onNavigate('book_issues_returns')}
-            className="text-xs font-black text-zinc-950 hover:text-black flex items-center gap-1 cursor-pointer"
+            className="text-xs font-black text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
           >
             <span>Circulation Desk</span>
             <ChevronRight className="w-3.5 h-3.5 stroke-[2.5]" />
@@ -144,11 +144,11 @@ export default function DashboardView({
         </div>
 
         {activeLoans.length === 0 ? (
-          <div className="py-14 text-center text-xs font-bold text-zinc-700 bg-zinc-100/50 rounded-2xl border-2 border-dashed border-zinc-300">
+          <div className="py-14 text-center text-xs font-bold text-zinc-700 bg-zinc-100 rounded-2xl border-2 border-dashed border-zinc-300">
             No books currently on loan. All physical copies are resting on library shelves.
           </div>
         ) : (
-          <div className="border-2 border-zinc-200 rounded-2xl overflow-hidden bg-white shadow-xs">
+          <div className="border-2 border-zinc-200 rounded-2xl overflow-hidden bg-white">
             <div className="divide-y-2 divide-zinc-100">
               {activeLoans.map(loan => {
                 const isOverdue = loan.status === 'Overdue';
@@ -182,7 +182,7 @@ export default function DashboardView({
                       )}
                       <button
                         onClick={() => onNavigate('book_issues_returns')}
-                        className="text-xs font-black text-zinc-950 hover:bg-zinc-100 px-3.5 py-1.5 border border-zinc-300 rounded-lg transition-colors cursor-pointer shadow-2xs"
+                        className="text-xs font-black text-blue-600 hover:bg-blue-50 px-3.5 py-1.5 border border-blue-200 rounded-lg transition-colors cursor-pointer"
                       >
                         Desk Ops →
                       </button>
@@ -196,12 +196,12 @@ export default function DashboardView({
 
         <div className="pt-2 flex items-center justify-between text-xs font-bold text-zinc-900 border-t-2 border-zinc-200">
           <span className="flex items-center gap-1.5 font-bold">
-            <Database className="w-4 h-4 text-zinc-950 stroke-[2.5]" />
+            <Database className="w-4 h-4 text-blue-600 stroke-[2.5]" />
             <span className="text-zinc-950 font-extrabold">MongoDB Atlas Connected • Dynamic Persistent Catalog</span>
           </span>
           <button
             onClick={() => onNavigate('settings')}
-            className="text-zinc-950 font-black hover:text-black hover:underline cursor-pointer"
+            className="text-blue-600 font-black hover:text-blue-800 hover:underline cursor-pointer"
           >
             System Settings →
           </button>

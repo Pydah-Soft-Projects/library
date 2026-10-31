@@ -72,13 +72,19 @@ export default function AllBooksView({
   // Filtered books for Total Books catalog tab (memoized to load by parts without re-filtering)
   const filteredBooks = useMemo(() => {
     const q = searchTerm.toLowerCase().trim();
+    const cleanNum = q.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
     return books.filter(b => {
       const matchCat = selectedCategory === 'All' || b.category === selectedCategory;
+      const tId = String(b.titleId || b.title_id || '').toLowerCase();
       const matchQuery = !q ||
         (b.title && b.title.toLowerCase().includes(q)) ||
         (b.author && b.author.toLowerCase().includes(q)) ||
+        (tId && tId.includes(q)) ||
+        (cleanNum && tId && tId.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
         (b.accession && b.accession.toLowerCase().includes(q)) ||
+        (cleanNum && b.accession && b.accession.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
         (b.barcode && b.barcode.toLowerCase().includes(q)) ||
+        (cleanNum && b.barcode && b.barcode.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
         (b.shelf && b.shelf.toLowerCase().includes(q)) ||
         (b.isbn && b.isbn.toLowerCase().includes(q));
 
@@ -91,6 +97,7 @@ export default function AllBooksView({
     if (activeTab !== 'available') return [];
 
     const q = searchTerm.toLowerCase().trim();
+    const cleanNum = q.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
     const result = [];
 
     for (let i = 0; i < books.length; i++) {
@@ -124,6 +131,7 @@ export default function AllBooksView({
           accession: cp.accession || String(cp.copy_number || j + 1),
           barcode: cp.barcode || cp.serial_no || '',
           serial_no: cp.serial_no || '',
+          titleId: book.titleId || book.title_id || '',
           shelf: book.shelf || 'Central Stack',
           category: book.category || 'General',
           title: book.title,
@@ -131,11 +139,16 @@ export default function AllBooksView({
         };
 
         if (q) {
+          const itemTId = String(item.titleId).toLowerCase();
           const matches =
             item.title.toLowerCase().includes(q) ||
             item.author.toLowerCase().includes(q) ||
+            itemTId.includes(q) ||
+            (cleanNum && itemTId && itemTId.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
             String(item.accession).toLowerCase().includes(q) ||
+            (cleanNum && String(item.accession).replace(/[\s\-_]/g, '').includes(cleanNum)) ||
             String(item.barcode).toLowerCase().includes(q) ||
+            (cleanNum && String(item.barcode).replace(/[\s\-_]/g, '').includes(cleanNum)) ||
             String(item.serial_no).toLowerCase().includes(q) ||
             String(item.shelf).toLowerCase().includes(q) ||
             String(item.category).toLowerCase().includes(q) ||
@@ -267,8 +280,8 @@ export default function AllBooksView({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search books by title, author, book number, or shelf..."
-              className="w-full pl-9 pr-3 py-2 text-xs border border-zinc-200 rounded-lg text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors"
+              placeholder="Search books by title, author, Title ID, book number, or shelf..."
+              className="w-full pl-9 pr-3 py-2 text-xs border border-zinc-200 rounded-lg text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 transition-colors"
             />
           </div>
 
@@ -282,7 +295,7 @@ export default function AllBooksView({
                   setPageSize(Number(e.target.value));
                   setCurrentPage(1);
                 }}
-                className="px-2 py-1.5 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                className="px-2 py-1.5 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-blue-600 cursor-pointer"
                 title="Change items per page"
               >
                 <option value={10}>10</option>
@@ -297,7 +310,7 @@ export default function AllBooksView({
               <button
                 onClick={() => setViewMode('table')}
                 className={`p-1 rounded-md transition-colors ${
-                  viewMode === 'table' ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-400 hover:text-zinc-600'
+                  viewMode === 'table' ? 'bg-blue-50 text-blue-700' : 'text-zinc-400 hover:text-zinc-600'
                 }`}
                 title="Table View"
               >
@@ -306,7 +319,7 @@ export default function AllBooksView({
               <button
                 onClick={() => setViewMode('grid')}
                 className={`p-1 rounded-md transition-colors ${
-                  viewMode === 'grid' ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-400 hover:text-zinc-600'
+                  viewMode === 'grid' ? 'bg-blue-50 text-blue-700' : 'text-zinc-400 hover:text-zinc-600'
                 }`}
                 title="Grid View"
               >
@@ -322,10 +335,10 @@ export default function AllBooksView({
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
+              className={`px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 selectedCategory === cat
-                  ? 'bg-zinc-900 text-white'
-                  : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+                  ? 'bg-blue-600 text-white font-bold'
+                  : 'text-zinc-700 hover:bg-blue-50 hover:text-blue-700'
               }`}
             >
               {cat}
@@ -368,7 +381,17 @@ export default function AllBooksView({
                   <tr key={`${cp.id || idx}`} className="hover:bg-zinc-50/70 transition-colors">
                     <td className="py-3 px-3">
                       <div className="font-semibold text-zinc-900">{cp.title}</div>
-                      <div className="text-[11px] text-zinc-400 mt-0.5">{cp.author}</div>
+                      <div className="text-[11px] text-zinc-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                        <span>{cp.author}</span>
+                        {(cp.titleId || cp.book?.titleId || cp.book?.title_id) && (
+                          <>
+                            <span>•</span>
+                            <span className="font-mono text-blue-700 font-semibold bg-blue-50 px-1 rounded text-[10px]">
+                              Title ID: {cp.titleId || cp.book?.titleId || cp.book?.title_id}
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </td>
 
                     <td className="py-3 px-3 font-mono">
@@ -506,7 +529,17 @@ export default function AllBooksView({
                     <tr key={`${book.id || book._id || 'b'}-${idx}`} className="hover:bg-zinc-50/70 transition-colors">
                       <td className="py-3 px-3">
                         <div className="font-semibold text-zinc-900">{book.title}</div>
-                        <div className="text-[11px] text-zinc-400 mt-0.5">{book.author}</div>
+                        <div className="text-[11px] text-zinc-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                          <span>{book.author}</span>
+                          {(book.titleId || book.title_id) && (
+                            <>
+                              <span>•</span>
+                              <span className="font-mono text-blue-700 font-semibold bg-blue-50 px-1 rounded text-[10px]">
+                                Title ID: {book.titleId || book.title_id}
+                              </span>
+                            </>
+                          )}
+                        </div>
                       </td>
 
                       <td className="py-3 px-3 font-mono">
@@ -677,7 +710,7 @@ export default function AllBooksView({
                   setPageSize(Number(e.target.value));
                   setCurrentPage(1);
                 }}
-                className="px-2 py-1 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-zinc-900 cursor-pointer shadow-2xs"
+                className="px-2 py-1 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-blue-600 cursor-pointer"
                 title="Change items per page"
               >
                 <option value={10}>10 per page</option>
@@ -737,8 +770,8 @@ export default function AllBooksView({
                       onClick={() => setCurrentPage(item)}
                       className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                         item === safePage
-                          ? 'bg-zinc-900 text-white shadow-2xs'
-                          : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                          ? 'bg-blue-600 text-white'
+                          : 'border border-zinc-200 text-zinc-700 hover:bg-blue-50'
                       }`}
                     >
                       {item}
@@ -772,8 +805,8 @@ export default function AllBooksView({
 
       {/* Edit Book Modal */}
       {editingBook && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-xl border border-zinc-200 shadow-lg max-w-md w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl border border-zinc-200 shadow-md max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
               <h3 className="font-bold text-sm text-zinc-900">Edit Book Record</h3>
               <button onClick={() => setEditingBook(null)} className="text-zinc-400 hover:text-zinc-600">
@@ -858,8 +891,8 @@ export default function AllBooksView({
       {/* COPIES INSPECTION MODAL */}
       {/* ============================================================ */}
       {viewingCopiesBook && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-xl border border-zinc-200 shadow-xl max-w-lg w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl border border-zinc-200 shadow-md max-w-lg w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
               <div>
                 <h3 className="font-bold text-sm text-zinc-900">{viewingCopiesBook.title}</h3>
@@ -869,7 +902,7 @@ export default function AllBooksView({
               </div>
               <button
                 onClick={() => setViewingCopiesBook(null)}
-                className="text-zinc-400 hover:text-zinc-600 p-1"
+                className="text-zinc-400 hover:text-zinc-600 p-1 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -905,7 +938,7 @@ export default function AllBooksView({
               </span>
               <button
                 onClick={() => setViewingCopiesBook(null)}
-                className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-medium"
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
               >
                 Close
               </button>

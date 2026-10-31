@@ -25,10 +25,10 @@ export default function BooksInLibraryView({ books, onSelectIssue, onToast }) {
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+      <div className="bg-blue-600 rounded-2xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-white/20 backdrop-blur-md mb-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-white/20  mb-2">
               <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
               <span>Physical Shelf Holdings</span>
               <span>•</span>
@@ -42,7 +42,7 @@ export default function BooksInLibraryView({ books, onSelectIssue, onToast }) {
             </p>
           </div>
 
-          <div className="p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-right self-start md:self-auto">
+          <div className="p-4 rounded-2xl bg-white/10  border border-white/20 text-right self-start md:self-auto">
             <span className="text-xs text-emerald-100 block font-semibold uppercase">Copies on Shelf</span>
             <span className="text-3xl font-heading font-extrabold text-white">
               {totalPhysicalCopiesOnShelf}

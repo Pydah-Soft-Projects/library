@@ -17,6 +17,16 @@ const bookSchema = new mongoose.Schema(
       trim: true, 
       default: '' 
     },
+    title_id: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    titleId: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     category: { 
       type: String, 
       default: 'General' 

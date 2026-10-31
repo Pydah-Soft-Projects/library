@@ -13,35 +13,20 @@ const db = require('../config/db');
 // 1. Issue Book to Patron (Persisted dynamically in MongoDB)
 async function issueBook(req, res) {
   try {
-    const { barcode, patron_id, user_id, due_date, loan_days } = req.body || {};
+    const { barcode, barcodes, books: reqBooks, patron_id, user_id, due_date, loan_days } = req.body || {};
 
-    if (!barcode) {
+    // 1. Collect all barcodes / book numbers to issue
+    let itemsToIssue = [];
+    if (Array.isArray(barcodes) && barcodes.length > 0) {
+      itemsToIssue = barcodes.map(b => String(b).trim()).filter(Boolean);
+    } else if (Array.isArray(reqBooks) && reqBooks.length > 0) {
+      itemsToIssue = reqBooks.map(b => String(b.barcode || b.accession || b).trim()).filter(Boolean);
+    } else if (barcode) {
+      itemsToIssue = [String(barcode).trim()];
+    }
+
+    if (itemsToIssue.length === 0) {
       return res.status(400).json({ error: 'Book barcode or accession number is required to issue.' });
-    }
-
-    const cleanBarcode = String(barcode).trim();
-    const strippedBarcode = cleanBarcode.replace(/[\s\-_]/g, '');
-
-    // 1. Find book in MongoDB Atlas
-    const book = await Book.findOne({
-      $or: [
-        { barcode: cleanBarcode },
-        { accession: cleanBarcode },
-        { barcode: strippedBarcode },
-        { accession: strippedBarcode },
-        { 'copies_detail.barcode': cleanBarcode },
-        { 'copies_detail.barcode': strippedBarcode },
-        { 'copies_detail.accession': cleanBarcode },
-        { 'copies_detail.accession': strippedBarcode }
-      ]
-    });
-
-    if (!book) {
-      return res.status(404).json({ error: `Book with barcode/accession [${cleanBarcode}] not found in catalog.` });
-    }
-
-    if (book.available <= 0) {
-      return res.status(400).json({ error: `All copies of "${book.title}" are currently on loan.` });
     }
 
     // 2. Identify Patron directly via SDMS (DO NOT touch the User schema)
@@ -91,9 +76,9 @@ async function issueBook(req, res) {
       status: { $in: ['Borrowed', 'Overdue', 'Active'] }
     });
 
-    if (currentLoansCount >= maxQuota) {
+    if (currentLoansCount + itemsToIssue.length > maxQuota) {
       return res.status(403).json({
-        error: `Borrowing quota reached: Patron ${patronName} (${cleanPatronId}) already has ${currentLoansCount} active loans (Institutional limit: ${maxQuota} books).`
+        error: `Borrowing quota reached: Patron ${patronName} (${cleanPatronId}) already has ${currentLoansCount} active loans and cannot borrow ${itemsToIssue.length} more books (Institutional limit: ${maxQuota} books).`
       });
     }
 
@@ -112,74 +97,103 @@ async function issueBook(req, res) {
     } else {
       dueDateObj.setDate(issueDate.getDate() + defaultLoanDays);
     }
-
-    // 6. Determine single book number to issue
-    let singleAccession = cleanBarcode;
-    if (Array.isArray(book.copies_detail) && book.copies_detail.length > 0) {
-      let copy = book.copies_detail.find(c => 
-        (c.barcode === cleanBarcode || c.accession === cleanBarcode ||
-         c.barcode === strippedBarcode || c.accession === strippedBarcode) &&
-        c.status === 'Available'
-      );
-      if (!copy) {
-        copy = book.copies_detail.find(c => c.status === 'Available') || book.copies_detail[0];
-      }
-      if (copy) {
-        copy.status = 'Borrowed';
-        singleAccession = copy.accession || copy.barcode || copy.serial_no || cleanBarcode;
-      }
-    }
-    if (String(singleAccession).includes('-')) {
-      singleAccession = String(singleAccession).split('-')[0].trim();
-    }
-
-    // 7. Create Loan in MongoDB (user_id is strictly null for SDMS students)
-    const loanDoc = await Loan.create({
-      book_id: book._id,
-      book_title: book.title,
-      book_barcode: singleAccession,
-      accession: singleAccession,
-      user_id: null,
-      patron_id: cleanPatronId,
-      patron_name: patronName,
-      department: patronDept,
-      staff_id: req.user?.userId || 'ADMIN',
-      issue_date: issueDate,
-      due_date: dueDateObj,
-      status: 'Borrowed',
-      renewals_count: 0
-    });
-
-    // 7. Decrement book available count in MongoDB
-    book.available = Math.max(0, book.available - 1);
-    if (Array.isArray(book.copies_detail)) {
-      const copy = book.copies_detail.find(c => 
-        c.barcode === cleanBarcode || c.accession === cleanBarcode ||
-        c.barcode === strippedBarcode || c.accession === strippedBarcode
-      );
-      if (copy) copy.status = 'Borrowed';
-    }
-    await book.save();
-
-    // 8. Log forensic audit trail in MongoDB
-    await logAudit({
-      actor_id: req.user?.userId || 'ADMIN',
-      action_key: 'circulation.issue',
-      target_resource: `LOAN:${loanDoc._id.toString()}`,
-      payload: {
-        patron: patronName,
-        patron_id: cleanPatronId,
-        book: book.title,
-        accession: singleAccession,
-        due_date: dueDateObj.toISOString()
-      }
-    });
-
     const dueDateFormatted = dueDateObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
-    res.status(201).json({
-      message: `Book "${book.title}" successfully issued to ${patronName}.`,
-      loan: {
+    // 6. Issue each book
+    const createdLoans = [];
+    for (const itemBarcode of itemsToIssue) {
+      const cleanBarcode = String(itemBarcode).trim();
+      const strippedBarcode = cleanBarcode.replace(/[\s\-_]/g, '');
+
+      // Find book in MongoDB Atlas
+      const book = await Book.findOne({
+        $or: [
+          { barcode: cleanBarcode },
+          { accession: cleanBarcode },
+          { barcode: strippedBarcode },
+          { accession: strippedBarcode },
+          { title_id: cleanBarcode },
+          { titleId: cleanBarcode },
+          { title_id: strippedBarcode },
+          { titleId: strippedBarcode },
+          { 'copies_detail.barcode': cleanBarcode },
+          { 'copies_detail.barcode': strippedBarcode },
+          { 'copies_detail.accession': cleanBarcode },
+          { 'copies_detail.accession': strippedBarcode }
+        ]
+      });
+
+      if (!book) {
+        return res.status(404).json({ error: `Book with barcode/accession [${cleanBarcode}] not found in catalog.` });
+      }
+
+      if (book.available <= 0) {
+        return res.status(400).json({ error: `All copies of "${book.title}" are currently on loan.` });
+      }
+
+      // Determine single book number to issue
+      let singleAccession = cleanBarcode;
+      if (Array.isArray(book.copies_detail) && book.copies_detail.length > 0) {
+        let copy = book.copies_detail.find(c => 
+          (c.barcode === cleanBarcode || c.accession === cleanBarcode ||
+           c.barcode === strippedBarcode || c.accession === strippedBarcode) &&
+          c.status === 'Available'
+        );
+        if (!copy) {
+          copy = book.copies_detail.find(c => c.status === 'Available') || book.copies_detail[0];
+        }
+        if (copy) {
+          copy.status = 'Borrowed';
+          singleAccession = copy.accession || copy.barcode || copy.serial_no || cleanBarcode;
+        }
+      }
+      if (String(singleAccession).includes('-')) {
+        singleAccession = String(singleAccession).split('-')[0].trim();
+      }
+
+      // Create Loan in MongoDB
+      const loanDoc = await Loan.create({
+        book_id: book._id,
+        book_title: book.title,
+        book_barcode: singleAccession,
+        accession: singleAccession,
+        user_id: null,
+        patron_id: cleanPatronId,
+        patron_name: patronName,
+        department: patronDept,
+        staff_id: req.user?.userId || 'ADMIN',
+        issue_date: issueDate,
+        due_date: dueDateObj,
+        status: 'Borrowed',
+        renewals_count: 0
+      });
+
+      // Decrement book available count in MongoDB
+      book.available = Math.max(0, book.available - 1);
+      if (Array.isArray(book.copies_detail)) {
+        const copy = book.copies_detail.find(c => 
+          c.barcode === cleanBarcode || c.accession === cleanBarcode ||
+          c.barcode === strippedBarcode || c.accession === strippedBarcode
+        );
+        if (copy) copy.status = 'Borrowed';
+      }
+      await book.save();
+
+      // Log forensic audit trail in MongoDB
+      await logAudit({
+        actor_id: req.user?.userId || 'ADMIN',
+        action_key: 'circulation.issue',
+        target_resource: `LOAN:${loanDoc._id.toString()}`,
+        payload: {
+          patron: patronName,
+          patron_id: cleanPatronId,
+          book: book.title,
+          accession: singleAccession,
+          due_date: dueDateObj.toISOString()
+        }
+      });
+
+      createdLoans.push({
         id: loanDoc._id.toString(),
         bookTitle: book.title,
         bookBarcode: cleanBarcode,
@@ -193,13 +207,15 @@ async function issueBook(req, res) {
         due_date: dueDateObj.toISOString(),
         status: 'Borrowed',
         renewalsCount: 0
-      },
-      book: {
-        id: book._id.toString(),
-        title: book.title,
-        accession: singleAccession,
-        remaining_copies: book.available
-      },
+      });
+    }
+
+    res.status(201).json({
+      message: createdLoans.length === 1
+        ? `Book "${createdLoans[0].bookTitle}" successfully issued to ${patronName}.`
+        : `${createdLoans.length} books successfully issued to ${patronName}.`,
+      loan: createdLoans[0],
+      loans: createdLoans,
       due_date_formatted: dueDateFormatted
     });
   } catch (err) {

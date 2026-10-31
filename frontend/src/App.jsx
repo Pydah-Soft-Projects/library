@@ -623,6 +623,70 @@ export default function App() {
 
   // Issue Book (Circulation Desk) - Handles both object payload and individual parameters
   const handleIssueBook = async (barcodeOrPayload, patronIdParam, customDueDateStr = null, patronObj = null) => {
+    // Multi-book issue support
+    if (barcodeOrPayload && typeof barcodeOrPayload === 'object' && Array.isArray(barcodeOrPayload.books) && barcodeOrPayload.books.length > 0) {
+      const booksList = barcodeOrPayload.books;
+      const patronId = barcodeOrPayload.patronId || barcodeOrPayload.studentPin || barcodeOrPayload.rollNo;
+      const dueDateParam = barcodeOrPayload.manualDueDate || barcodeOrPayload.dueDate;
+      const finalPatronName = barcodeOrPayload.patronName || `Patron #${patronId}`;
+      const finalDept = barcodeOrPayload.department || 'General';
+
+      try {
+        const res = await fetch('/api/circulation/issue', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+          },
+          body: JSON.stringify({ 
+            barcodes: booksList.map(b => b.barcode || b.accession), 
+            patron_id: patronId, 
+            patron_name: finalPatronName,
+            department: finalDept,
+            due_date: dueDateParam 
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          addToast(data.error || 'Failed to issue books.', 'danger');
+          return;
+        }
+
+        const newLoans = data.loans || (data.loan ? [data.loan] : []);
+        setLoans(prev => {
+          const newIds = new Set(newLoans.map(l => String(l.id || l._id)));
+          const cleanPrev = prev.filter(l => !newIds.has(String(l.id || l._id)));
+          return [...newLoans, ...cleanPrev];
+        });
+
+        // Decrement stock for each issued book
+        setBooks(prev => {
+          const issuedBarcodes = new Set(booksList.map(b => String(b.barcode || b.accession).toLowerCase()));
+          return prev.map(b => {
+            const bCode = String(b.barcode || b.accession || '').toLowerCase();
+            if (issuedBarcodes.has(bCode)) {
+              return { ...b, available: Math.max((b.available !== undefined ? b.available : 1) - 1, 0) };
+            }
+            return b;
+          });
+        });
+
+        // Increment student borrowed count
+        setStudents(prev => prev.map(s => {
+          if (s.id === patronId || s.rollNo === patronId || s.pin_no === patronId) {
+            return { ...s, borrowedCount: (s.borrowedCount || 0) + booksList.length };
+          }
+          return s;
+        }));
+
+        addToast(data.message || `Successfully issued ${booksList.length} books to ${finalPatronName}.`, 'success');
+        return data;
+      } catch (err) {
+        addToast('Failed to issue books: ' + err.message, 'danger');
+        return;
+      }
+    }
+
     let barcode = barcodeOrPayload;
     let patronId = patronIdParam;
     let dueDateParam = customDueDateStr;
@@ -1306,7 +1370,7 @@ export default function App() {
             <div
               key={t.id}
               onClick={() => removeToast(t.id)}
-              className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in slide-in-from-right duration-200 cursor-pointer ${
+              className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-md bg-white flex items-center justify-between gap-3 animate-in slide-in-from-right duration-200 cursor-pointer ${
                 t.type === 'success'
                   ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
                   : t.type === 'danger'
@@ -1511,7 +1575,7 @@ export default function App() {
           <div
             key={t.id}
             onClick={() => removeToast(t.id)}
-            className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in slide-in-from-right duration-200 cursor-pointer ${
+            className={`pointer-events-auto p-3.5 rounded-2xl border text-xs font-semibold shadow-md bg-white flex items-center justify-between gap-3 animate-in slide-in-from-right duration-200 cursor-pointer ${
               t.type === 'success'
                 ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
                 : t.type === 'danger'

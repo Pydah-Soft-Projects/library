@@ -34,10 +34,10 @@ export default function BooksCheckedOutView({
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-700 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+      <div className="bg-blue-600 rounded-2xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-white/20 backdrop-blur-md mb-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-white/20  mb-2">
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
               <span>Circulating Asset Tracking</span>
               <span>•</span>
@@ -52,14 +52,14 @@ export default function BooksCheckedOutView({
           </div>
 
           <div className="flex items-center gap-3 self-start md:self-auto">
-            <div className="p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-center">
+            <div className="p-4 rounded-2xl bg-white/10  border border-white/20 text-center">
               <span className="text-xs text-blue-100 block font-semibold uppercase">Total Outside</span>
               <span className="text-3xl font-heading font-extrabold text-white">
                 {activeLoans.length}
               </span>
               <span className="text-[10px] text-blue-200 block">Volumes Out</span>
             </div>
-            <div className="p-4 rounded-2xl bg-rose-500/20 backdrop-blur-md border border-rose-400/30 text-center">
+            <div className="p-4 rounded-2xl bg-rose-500/20  border border-rose-400/30 text-center">
               <span className="text-xs text-rose-200 block font-semibold uppercase">Overdue</span>
               <span className="text-3xl font-heading font-extrabold text-rose-300">
                 {overdueCount}

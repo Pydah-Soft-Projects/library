@@ -149,7 +149,7 @@ export default function SettingsView({
             type="button"
             onClick={handleSavePolicies}
             disabled={saving}
-            className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
           >
             <Save className="w-3.5 h-3.5" />
             <span>{saving ? 'Saving...' : 'Save Settings'}</span>
@@ -175,7 +175,7 @@ export default function SettingsView({
                 min="1"
                 value={defaultLoanDays}
                 onChange={(e) => setDefaultLoanDays(Number(e.target.value))}
-                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-zinc-900"
+                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-blue-600"
               />
               <span className="text-[11px] text-zinc-400 mt-0.5 block">Standard collegiate loan term</span>
             </div>
@@ -192,7 +192,7 @@ export default function SettingsView({
                   min="0"
                   value={dailyFineRate}
                   onChange={(e) => setDailyFineRate(Number(e.target.value))}
-                  className="w-full pl-7 pr-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-zinc-900"
+                  className="w-full pl-7 pr-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-blue-600"
                 />
               </div>
               <span className="text-[11px] text-zinc-400 mt-0.5 block">Automated fine accumulation</span>
@@ -207,7 +207,7 @@ export default function SettingsView({
                 min="1"
                 value={maxBooksQuota}
                 onChange={(e) => setMaxBooksQuota(Number(e.target.value))}
-                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-zinc-900"
+                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-blue-600"
               />
               <span className="text-[11px] text-zinc-400 mt-0.5 block">Maximum simultaneous loans</span>
             </div>
@@ -221,7 +221,7 @@ export default function SettingsView({
                 min="0"
                 value={maxRenewals}
                 onChange={(e) => setMaxRenewals(Number(e.target.value))}
-                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-zinc-900"
+                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-blue-600"
               />
               <span className="text-[11px] text-zinc-400 mt-0.5 block">+15 days per renewal</span>
             </div>
@@ -241,7 +241,7 @@ export default function SettingsView({
                 type="text"
                 value={libraryName}
                 onChange={(e) => setLibraryName(e.target.value)}
-                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-zinc-900"
+                className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-blue-600"
               />
             </div>
 
@@ -252,7 +252,7 @@ export default function SettingsView({
                   type="email"
                   value={deskEmail}
                   onChange={(e) => setDeskEmail(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-zinc-900"
+                  className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-blue-600"
                 />
               </div>
 
@@ -262,7 +262,7 @@ export default function SettingsView({
                   type="text"
                   value={operatingHours}
                   onChange={(e) => setOperatingHours(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-zinc-900"
+                  className="w-full px-3 py-1.5 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-none focus:border-blue-600"
                 />
               </div>
             </div>

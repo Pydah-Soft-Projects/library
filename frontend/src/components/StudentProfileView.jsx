@@ -100,7 +100,7 @@ export default function StudentProfileView({
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-200">
       {/* Header */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Patron Profile & ID</span>
           <h2 className="text-xl font-heading font-extrabold text-slate-900">
@@ -136,7 +136,7 @@ export default function StudentProfileView({
       {/* Main Grid */}
       <div className="grid md:grid-cols-2 gap-6">
         {/* Left: Academic Credentials & Edit Mode */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
           <div className="flex items-center gap-4 pb-4 border-b border-slate-100">
             {customAvatarUrl ? (
               <img 
@@ -145,7 +145,7 @@ export default function StudentProfileView({
                 className="w-16 h-16 rounded-2xl object-cover border-2 border-blue-500 shadow-md"
               />
             ) : (
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-extrabold text-3xl shadow-md">
+              <div className="w-16 h-16 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-extrabold text-3xl shadow-md">
                 {currentPreset.emoji}
               </div>
             )}
@@ -310,7 +310,7 @@ export default function StudentProfileView({
         </div>
 
         {/* Right: Digital Patron Library Pass with Scannable Barcode */}
-        <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-3xl p-6 shadow-2xl border border-slate-700 relative overflow-hidden flex flex-col justify-between">
+        <div className="bg-blue-600 text-white rounded-2xl p-6 shadow-md border border-slate-700 relative overflow-hidden flex flex-col justify-between">
           <div className="absolute -top-12 -right-12 w-36 h-36 rounded-full bg-blue-500/15 blur-2xl" />
 
           {/* Pass Header */}
@@ -335,7 +335,7 @@ export default function StudentProfileView({
                 className="w-14 h-14 rounded-2xl object-cover border-2 border-cyan-400 shadow-md shrink-0"
               />
             ) : (
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-cyan-500 flex items-center justify-center text-white font-extrabold text-2xl shadow-md shrink-0">
+              <div className="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center text-white font-extrabold text-2xl shadow-md shrink-0">
                 {currentPreset.emoji}
               </div>
             )}

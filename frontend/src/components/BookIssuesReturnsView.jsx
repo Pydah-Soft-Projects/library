@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   ArrowLeftRight, User, Calendar, Clock, AlertTriangle, 
   CheckCircle2, Search, Printer, Check, X, RefreshCw, 
@@ -39,13 +39,13 @@ function StudentSdmsPhoto({ student, size = 'md', className = '' }) {
         src={photoUrl}
         alt={student?.name || 'Student'}
         onError={() => setHasError(true)}
-        className={`${dim} object-cover border-2 border-blue-300/90 shrink-0 shadow-md bg-blue-50 ring-4 ring-blue-100/60 transition-transform`}
+        className={`${dim} object-cover border-2 border-blue-300/90 shrink-0 shadow-md bg-blue-50  transition-transform`}
       />
     );
   }
 
   return (
-    <div className={`${dim} bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold shrink-0 shadow-md shadow-blue-500/25 ring-4 ring-blue-100/60`}>
+    <div className={`${dim} bg-blue-600 text-white flex items-center justify-center font-bold shrink-0 border border-blue-300`}>
       {initial}
     </div>
   );
@@ -176,35 +176,108 @@ export default function BookIssuesReturnsView({
   // ==================== ISSUE DESK STATE ====================
   const availableBooks = books.filter(b => getBookAvailableCount(b) > 0);
   
-  // STRICT REQUIREMENT: Do NOT select any book by default!
-  const [selectedBookBarcode, setSelectedBookBarcode] = useState(
-    prefilledBook ? prefilledBook.barcode : ''
-  );
+  // Selected Books to Issue (Multiple Books Supported)
+  const [selectedBooks, setSelectedBooks] = useState(() => {
+    return prefilledBook ? [prefilledBook] : [];
+  });
 
   useEffect(() => {
     if (prefilledBook) {
-      setSelectedBookBarcode(prefilledBook.barcode);
+      setSelectedBooks([prefilledBook]);
       setActiveForm('issue');
     }
   }, [prefilledBook]);
 
-  // ==================== BOOK SEARCH FOR ISSUE DESK ====================
+  // ==================== BOOK NUMBER & TITLE SEARCH FOR ISSUE DESK ====================
   const [bookSearchInput, setBookSearchInput] = useState('');
   const [isBookDropdownOpen, setIsBookDropdownOpen] = useState(false);
   const bookDropdownRef = useRef(null);
 
-  // Filter available books based on search input (by title, accession, barcode, author, shelf)
-  const filteredAvailableBooks = availableBooks.filter(b => {
-    if (!bookSearchInput.trim()) return true;
-    const q = bookSearchInput.toLowerCase().trim();
-    return (
-      (b.title && b.title.toLowerCase().includes(q)) ||
-      (b.author && b.author.toLowerCase().includes(q)) ||
-      (b.accession && b.accession.toLowerCase().includes(q)) ||
-      (b.barcode && b.barcode.toLowerCase().includes(q)) ||
-      (b.shelf && b.shelf.toLowerCase().includes(q))
-    );
-  });
+  // Filter available books based on search input (by book number, serial, accession, title, author, shelf, titleId)
+  const filteredAvailableBooks = useMemo(() => {
+    if (!bookSearchInput.trim()) return availableBooks;
+    const rawQ = bookSearchInput.trim().toLowerCase();
+    const cleanNum = rawQ.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
+    const isNumeric = /^\d+$/.test(cleanNum);
+
+    return availableBooks.filter(b => {
+      // 1. Text match (title, author, shelf, category, titleId)
+      if (b.title && b.title.toLowerCase().includes(rawQ)) return true;
+      if (b.author && b.author.toLowerCase().includes(rawQ)) return true;
+      if (b.shelf && b.shelf.toLowerCase().includes(rawQ)) return true;
+      if (b.category && b.category.toLowerCase().includes(rawQ)) return true;
+      if (b.titleId && String(b.titleId).toLowerCase().includes(rawQ)) return true;
+      if (b.title_id && String(b.title_id).toLowerCase().includes(rawQ)) return true;
+
+      // 2. Direct string match on accession, barcode, titleId
+      const accStr = String(b.accession || '').toLowerCase();
+      const barcodeStr = String(b.barcode || '').toLowerCase();
+      const titleIdStr = String(b.titleId || b.title_id || '').toLowerCase();
+      if (accStr.includes(rawQ) || barcodeStr.includes(rawQ) || (titleIdStr && titleIdStr.includes(rawQ))) return true;
+
+      // 3. Numeric matching for Book Number / Accession / Serials / TitleId
+      if (cleanNum) {
+        if (titleIdStr && titleIdStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
+        if (accStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
+        if (barcodeStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
+        if (titleIdStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
+
+        // Check if numeric query falls within accession range (e.g. "19407 - 19421" or "21 - 25")
+        if (isNumeric) {
+          const num = parseInt(cleanNum, 10);
+          const rangeMatch = accStr.match(/(\d+)\s*[-–]\s*(\d+)/);
+          if (rangeMatch) {
+            const start = parseInt(rangeMatch[1], 10);
+            const end = parseInt(rangeMatch[2], 10);
+            if (!isNaN(num) && num >= start && num <= end) return true;
+          }
+        }
+
+        // Check individual copy serials & accessions in copies_detail
+        if (Array.isArray(b.copies_detail) && b.copies_detail.length > 0) {
+          const matchedCopy = b.copies_detail.some(c => {
+            const cpAcc = String(c.accession || '').toLowerCase();
+            const cpSer = String(c.serial_no || '').toLowerCase();
+            const cpBar = String(c.barcode || '').toLowerCase();
+            const cpNum = String(c.copy_number || '');
+            return (
+              cpAcc.includes(cleanNum) ||
+              cpSer.includes(cleanNum) ||
+              cpBar.includes(cleanNum) ||
+              cpNum === cleanNum
+            );
+          });
+          if (matchedCopy) return true;
+        }
+      }
+
+      return false;
+    });
+  }, [availableBooks, bookSearchInput]);
+
+  const handleAddBookToIssue = (book) => {
+    if (!book) return;
+    const avail = getBookAvailableCount(book);
+    const alreadySelectedCount = selectedBooks.filter(b => (b.id && b.id === book.id) || (b.barcode && b.barcode === book.barcode) || (b.accession && b.accession === book.accession)).length;
+
+    if (alreadySelectedCount >= avail) {
+      if (onToast) onToast(`All ${avail} available copies of "${book.title}" are already in the issue list.`, 'warning');
+      return;
+    }
+
+    if (selectedBooks.length >= maxBooksQuota) {
+      if (onToast) onToast(`Borrowing limit reached: You can issue at most ${maxBooksQuota} books per transaction.`, 'warning');
+      return;
+    }
+
+    setSelectedBooks(prev => [...prev, book]);
+    setBookSearchInput('');
+    setIsBookDropdownOpen(false);
+  };
+
+  const handleRemoveBookFromIssue = (indexToRemove) => {
+    setSelectedBooks(prev => prev.filter((_, idx) => idx !== indexToRemove));
+  };
 
   // ==================== SDMS STUDENT SEARCH FOR ISSUE DESK ====================
   const [studentSearchInput, setStudentSearchInput] = useState('');
@@ -234,12 +307,6 @@ export default function BookIssuesReturnsView({
     return d.toISOString().split('T')[0];
   });
   const [issuedSlip, setIssuedSlip] = useState(null);
-
-  const selectedBook = selectedBookBarcode 
-    ? books.find(b => b.barcode === selectedBookBarcode || b.accession === selectedBookBarcode)
-    : null;
-
-  const selectedBookStock = selectedBook ? getBookAvailableCount(selectedBook) : 0;
 
   // Live SDMS Database Student Lookup on Keystroke (Issue Desk) - Optimized with AbortController
   const handleIssueStudentSearchChange = (val) => {
@@ -355,13 +422,8 @@ export default function BookIssuesReturnsView({
     e.preventDefault();
     if (isSubmittingIssue) return;
 
-    if (!selectedBook) {
-      if (onToast) onToast('Please search and select a book to issue', 'error');
-      return;
-    }
-
-    if (selectedBookStock <= 0) {
-      if (onToast) onToast(`Cannot issue: Zero available copies in stock for "${selectedBook.title}"`, 'error');
+    if (selectedBooks.length === 0) {
+      if (onToast) onToast('Please search and add at least one book to issue', 'error');
       return;
     }
 
@@ -384,15 +446,16 @@ export default function BookIssuesReturnsView({
       (l.patronName && l.patronName.toLowerCase() === selectedStudent.name.toLowerCase())
     );
 
-    if (studentActiveLoans.length >= maxBooksQuota) {
-      if (onToast) onToast(`Borrowing quota reached: ${selectedStudent.name} already has ${studentActiveLoans.length} active loans (Institutional limit: ${maxBooksQuota} books per student).`, 'error');
+    if (studentActiveLoans.length + selectedBooks.length > maxBooksQuota) {
+      if (onToast) onToast(`Borrowing quota reached: ${selectedStudent.name} already has ${studentActiveLoans.length} active loans and cannot borrow ${selectedBooks.length} more books (Institutional limit: ${maxBooksQuota} books per student).`, 'error');
       return;
     }
 
     const payload = {
-      bookBarcode: selectedBook.barcode || selectedBook.accession,
-      bookTitle: selectedBook.title,
-      accession: selectedBook.accession,
+      books: selectedBooks,
+      bookBarcode: selectedBooks[0].barcode || selectedBooks[0].accession,
+      bookTitle: selectedBooks[0].title,
+      accession: selectedBooks[0].accession,
       patronId: selectedStudent.pin_no || selectedStudent.rollNo,
       patronName: selectedStudent.name,
       department: selectedStudent.department || 'General',
@@ -409,10 +472,13 @@ export default function BookIssuesReturnsView({
       // Set printable confirmation receipt
       setIssuedSlip({
         ...payload,
+        books: selectedBooks,
         dueDate: calculatedDueDate,
         issueDate: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
       });
 
+      setSelectedBooks([]);
+      setBookSearchInput('');
       if (onClearPrefilled) onClearPrefilled();
     } finally {
       setTimeout(() => setIsSubmittingIssue(false), 600);
@@ -441,13 +507,23 @@ export default function BookIssuesReturnsView({
       return;
     }
 
-    // 1. Check if it matches an active loan barcode or accession immediately
-    const matchedLoan = loans.find(l => 
-      l.status !== 'Returned' && (
-        (l.bookBarcode && l.bookBarcode.toLowerCase() === clean.toLowerCase()) ||
-        (l.accession && l.accession.toLowerCase() === clean.toLowerCase())
-      )
-    );
+    // 1. Check if it matches an active loan barcode, accession, titleId, or book number immediately
+    const cleanNum = clean.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
+    const matchedLoan = loans.find(l => {
+      if (String(l.status || '').toLowerCase() === 'returned') return false;
+      const bCode = String(l.bookBarcode || '').toLowerCase();
+      const acc = String(l.accession || '').toLowerCase();
+      const tId = String(l.titleId || l.title_id || '').toLowerCase();
+      const title = String(l.bookTitle || l.book_title || '').toLowerCase();
+      const cLower = clean.toLowerCase();
+      if (bCode === cLower || acc === cLower || tId === cLower || title === cLower) return true;
+      if (cleanNum) {
+        if (tId && tId.replace(/[\s\-_]/g, '') === cleanNum) return true;
+        if (acc && acc.replace(/[\s\-_]/g, '') === cleanNum) return true;
+        if (bCode && bCode.replace(/[\s\-_]/g, '') === cleanNum) return true;
+      }
+      return false;
+    });
     if (matchedLoan) {
       setSelectedLoanForReturn(matchedLoan);
       setSelectedReturnStudent({
@@ -831,10 +907,10 @@ export default function BookIssuesReturnsView({
   const filteredReturnLoans = activeLoans.filter(l => {
     // 1. If a student is selected in the Return Desk, filter by their PIN / Roll No or Name
     if (selectedReturnStudent) {
-      const pin = String(selectedReturnStudent.pin_no || selectedReturnStudent.rollNo || '').toLowerCase().trim();
-      const name = String(selectedReturnStudent.name || '').toLowerCase().trim();
-      const loanPin = String(l.patronId || '').toLowerCase().trim();
-      const loanName = String(l.patronName || '').toLowerCase().trim();
+      const pin = String(selectedReturnStudent.pin_no || selectedReturnStudent.rollNo || selectedReturnStudent.id || selectedReturnStudent.roll_number || selectedReturnStudent.admission_number || '').toLowerCase().trim();
+      const name = String(selectedReturnStudent.name || selectedReturnStudent.student_name || '').toLowerCase().trim();
+      const loanPin = String(l.patronId || l.patron_id || l.student_id || l.studentPin || l.rollNo || l.roll_number || '').toLowerCase().trim();
+      const loanName = String(l.patronName || l.patron_name || l.student_name || l.studentName || '').toLowerCase().trim();
       const matchesPin = pin && loanPin && (loanPin === pin || loanPin.includes(pin) || pin.includes(loanPin));
       const matchesName = name && loanName && (loanName === name || loanName.includes(name) || name.includes(loanName));
       return matchesPin || matchesName;
@@ -842,15 +918,17 @@ export default function BookIssuesReturnsView({
 
     if (!returnInput) return true;
     const raw = returnInput.toLowerCase().trim();
+    const cleanNum = raw.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
     const pinMatch = raw.match(/\(([^)]+)\)/);
     const extractedPin = pinMatch ? pinMatch[1].toLowerCase().trim() : null;
     const cleanName = raw.replace(/\([^)]+\)/, '').toLowerCase().trim();
 
-    const bookTitle = (l.bookTitle || '').toLowerCase();
-    const patronName = (l.patronName || '').toLowerCase();
-    const patronId = (l.patronId || '').toLowerCase();
+    const bookTitle = (l.bookTitle || l.book_title || '').toLowerCase();
+    const patronName = (l.patronName || l.patron_name || l.student_name || '').toLowerCase();
+    const patronId = (l.patronId || l.patron_id || l.student_id || '').toLowerCase();
     const accession = (l.accession || '').toLowerCase();
-    const bookBarcode = (l.bookBarcode || '').toLowerCase();
+    const bookBarcode = (l.bookBarcode || l.book_barcode || '').toLowerCase();
+    const titleId = (l.titleId || l.title_id || '').toLowerCase();
     const department = (l.department || '').toLowerCase();
 
     return (
@@ -859,8 +937,12 @@ export default function BookIssuesReturnsView({
       (cleanName && patronName.includes(cleanName)) ||
       patronId.includes(raw) ||
       (extractedPin && patronId.includes(extractedPin)) ||
+      titleId.includes(raw) ||
+      (cleanNum && titleId.includes(cleanNum)) ||
       accession.includes(raw) ||
+      (cleanNum && accession.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
       bookBarcode.includes(raw) ||
+      (cleanNum && bookBarcode.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
       department.includes(raw)
     );
   });
@@ -1031,7 +1113,7 @@ export default function BookIssuesReturnsView({
       {/* 2. Desk Form: Modal Popup Dialog for Issue, Return, and Bulk Upload */}
       {activeForm !== null && (
         <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 overflow-y-auto animate-in fade-in duration-200"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setActiveForm(null);
@@ -1039,7 +1121,7 @@ export default function BookIssuesReturnsView({
             }
           }}
         >
-          <div className="bg-white border border-blue-200/90 rounded-3xl shadow-2xl p-6 sm:p-8 w-full max-w-4xl max-h-[92vh] overflow-y-auto relative animate-in zoom-in-95 duration-200 space-y-6">
+          <div className="bg-white border border-blue-200/90 rounded-2xl shadow-md p-6 sm:p-8 w-full max-w-4xl max-h-[92vh] overflow-y-auto relative animate-in zoom-in-95 duration-200 space-y-6">
             {/* Top Form Header with Mode Switcher & Close Button */}
             <div className="flex items-center justify-between pb-4 border-b border-zinc-100">
               <div className="flex items-center gap-3">
@@ -1111,15 +1193,15 @@ export default function BookIssuesReturnsView({
             {activeForm === 'issue' && (
               <div className="space-y-6">
                 {issuedSlip ? (
-                  <div className="border border-blue-200 bg-blue-50/40 rounded-3xl p-6 sm:p-7 space-y-4 text-xs animate-in fade-in">
+                  <div className="border border-blue-200 bg-blue-50/40 rounded-2xl p-6 sm:p-7 space-y-4 text-xs animate-in fade-in">
                     <div className="flex items-center justify-between pb-3 border-b border-blue-200">
                       <span className="font-bold text-blue-950 uppercase tracking-wider text-xs flex items-center gap-2">
                         <CheckCircle2 className="w-4 h-4 text-blue-600" />
-                        Issue Confirmation Receipt
+                        Issue Confirmation Receipt ({issuedSlip.books?.length || 1} Books)
                       </span>
                       <button
                         onClick={() => window.print()}
-                        className="px-3 py-1 text-blue-700 hover:bg-blue-100/80 rounded-lg transition-colors flex items-center gap-1 font-semibold"
+                        className="px-3 py-1 text-blue-700 hover:bg-blue-100 rounded-lg transition-colors flex items-center gap-1 font-semibold cursor-pointer"
                         title="Print Slip"
                       >
                         <Printer className="w-4 h-4" />
@@ -1129,9 +1211,23 @@ export default function BookIssuesReturnsView({
 
                     <div className="space-y-3 text-slate-700">
                       <div>
-                        <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">Book Title</div>
-                        <div className="font-bold text-base text-blue-950 mt-0.5">{issuedSlip.bookTitle}</div>
+                        <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider mb-1">
+                          Issued Books ({issuedSlip.books?.length || 1})
+                        </div>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                          {(issuedSlip.books || [{ title: issuedSlip.bookTitle, accession: issuedSlip.accession }]).map((b, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-2.5 bg-white rounded-xl border border-blue-100">
+                              <div className="font-bold text-blue-950 truncate max-w-sm">
+                                {idx + 1}. {b.title}
+                              </div>
+                              <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded shrink-0">
+                                #{getSingleBookNumber(b.barcode || b.accession)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
+
                       <div className="grid grid-cols-2 gap-3 pt-2 border-t border-blue-100">
                         <div>
                           <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">Student Name</div>
@@ -1144,8 +1240,8 @@ export default function BookIssuesReturnsView({
                       </div>
                       <div className="grid grid-cols-2 gap-3 pt-2 border-t border-blue-100">
                         <div>
-                          <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">Accession / Code</div>
-                          <div className="font-mono text-sm text-slate-800 mt-0.5">{issuedSlip.accession}</div>
+                          <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">Total Books Issued</div>
+                          <div className="font-bold text-sm text-blue-950 mt-0.5">{issuedSlip.books?.length || 1} Books</div>
                         </div>
                         <div>
                           <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">Due Date</div>
@@ -1160,25 +1256,25 @@ export default function BookIssuesReturnsView({
                           setIssuedSlip(null);
                           setStudentSearchInput('');
                           setSelectedStudent(null);
-                          setSelectedBookBarcode('');
+                          setSelectedBooks([]);
                           setBookSearchInput('');
                         }}
                         className="flex-1 py-2.5 bg-white border border-blue-300 hover:bg-blue-50 text-blue-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                       >
-                        Issue Next Book
+                        Issue Next Books
                       </button>
                       <button
                         onClick={() => {
                           setIssuedSlip(null);
                           setStudentSearchInput('');
                           setSelectedStudent(null);
-                          setSelectedBookBarcode('');
+                          setSelectedBooks([]);
                           setBookSearchInput('');
                           setActiveForm(null);
                         }}
-                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors shadow-md shadow-blue-500/25 cursor-pointer"
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
                       >
-                        Done / Close
+                        Done
                       </button>
                     </div>
                   </div>
@@ -1212,7 +1308,7 @@ export default function BookIssuesReturnsView({
                           )}
                         </div>
                       ) : (
-                        <div className="p-4 bg-gradient-to-r from-blue-50/80 via-blue-50/40 to-white border border-blue-200 rounded-2xl text-xs flex items-center justify-between shadow-xs">
+                        <div className="p-4 bg-white border border-blue-200 rounded-2xl text-xs flex items-center justify-between shadow-xs">
                           <div className="flex items-center gap-4">
                             <StudentSdmsPhoto student={selectedStudent} size="card" />
                             <div className="space-y-1">
@@ -1249,7 +1345,7 @@ export default function BookIssuesReturnsView({
 
                       {/* Dropdown for Student Matches */}
                       {isDropdownOpen && sdmsResults.length > 0 && !selectedStudent && (
-                        <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-2xl z-50 max-h-60 overflow-y-auto divide-y divide-blue-50 p-1.5">
+                        <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-md z-50 max-h-60 overflow-y-auto divide-y divide-blue-50 p-1.5">
                           <div className="px-3 py-1.5 text-[10px] font-bold text-blue-700 uppercase tracking-wider flex items-center justify-between">
                             <span>SDMS Database Matches</span>
                             <span className="text-slate-400 font-normal">{sdmsResults.length} found</span>
@@ -1281,126 +1377,178 @@ export default function BookIssuesReturnsView({
                       )}
                     </div>
 
-                    {/* STEP 2: SEARCH & SELECT BOOK (NOT SELECTED BY DEFAULT) */}
-                    <div className="relative space-y-2" ref={bookDropdownRef}>
+                    {/* STEP 2: SEARCH BY BOOK NUMBER OR TITLE & SELECT MULTIPLE BOOKS */}
+                    <div className="relative space-y-3" ref={bookDropdownRef}>
                       <div className="flex items-center justify-between">
-                        <label className="block font-bold text-blue-950 uppercase tracking-wider text-xs">
-                          2. Search & Select Book from Shelf
+                        <label className="block font-bold text-blue-950 uppercase tracking-wider text-xs flex items-center gap-2">
+                          <span>2. Search & Select Books to Issue</span>
+                          {selectedBooks.length > 0 && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
+                              {selectedBooks.length} Book{selectedBooks.length > 1 ? 's' : ''} Selected
+                            </span>
+                          )}
                         </label>
-                        <span className="text-[11px] text-blue-600 font-medium">Search by Title, Accession, or Barcode</span>
+                        <span className="text-[11px] text-blue-600 font-medium">
+                          Search by Book #, Accession, Serial, Title, or Barcode
+                        </span>
                       </div>
 
-                      {!selectedBook ? (
-                        <div className="relative">
-                          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-500" />
-                          <input
-                            type="text"
-                            required={!selectedBookBarcode}
-                            value={bookSearchInput}
-                            onChange={(e) => {
-                              setBookSearchInput(e.target.value);
-                              setIsBookDropdownOpen(true);
+                      {/* Search Input for Book Number or Title */}
+                      <div className="relative">
+                        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-500" />
+                        <input
+                          type="text"
+                          value={bookSearchInput}
+                          onChange={(e) => {
+                            setBookSearchInput(e.target.value);
+                            setIsBookDropdownOpen(true);
+                          }}
+                          onFocus={() => setIsBookDropdownOpen(true)}
+                          placeholder="Search by book number (e.g. 21, 19407, #1), Title ID, title, author, or barcode..."
+                          className="w-full pl-10 pr-10 py-3 border border-blue-200 rounded-2xl text-xs text-slate-900 bg-white focus:outline-none focus:border-blue-600 font-medium"
+                        />
+                        {bookSearchInput && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBookSearchInput('');
+                              setIsBookDropdownOpen(false);
                             }}
-                            onFocus={() => setIsBookDropdownOpen(true)}
-                            placeholder="Type book title (e.g. Let us c, Have Fun) or accession number (e.g. 1, 1121)..."
-                            className="w-full pl-10 pr-10 py-3 border border-blue-200 rounded-2xl text-xs text-slate-900 bg-blue-50/20 focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition-all font-medium"
-                          />
-                        </div>
-                      ) : (
-                        <div className="p-4 bg-gradient-to-r from-blue-50/80 via-blue-50/40 to-white border border-blue-200 rounded-2xl text-xs flex items-center justify-between shadow-xs">
-                          <div className="flex items-center gap-3.5">
-                            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm shadow-blue-500/30">
-                              <BookOpen className="w-5 h-5" />
-                            </div>
-                            <div>
-                              <div className="font-bold text-blue-950 text-sm flex items-center gap-2">
-                                <span>{selectedBook.title}</span>
-                                <span className="text-[11px] font-mono px-2 py-0.5 rounded-lg bg-blue-100 text-blue-800 font-bold">
-                                  Accession: #{selectedBook.accession}
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-slate-600 mt-0.5 flex items-center gap-2">
-                                <span>Author: <strong>{selectedBook.author}</strong></span>
-                                <span>•</span>
-                                <span>Shelf: <strong>{selectedBook.shelf}</strong></span>
-                                {selectedBook.barcode && <span>• Barcode: <code className="font-mono">{selectedBook.barcode}</code></span>}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <span className={`inline-flex items-center px-3 py-1 rounded-xl text-xs font-bold border shrink-0 ${
-                              selectedBookStock > 0 
-                                ? 'bg-blue-100 text-blue-800 border-blue-200' 
-                                : 'bg-rose-100 text-rose-800 border-rose-200'
-                            }`}>
-                              {selectedBookStock > 0 ? `${selectedBookStock} Copies Available` : '0 Copies Available (Out of Stock)'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedBookBarcode('');
-                                setBookSearchInput('');
-                                setIsBookDropdownOpen(true);
-                              }}
-                              className="p-1.5 hover:bg-blue-100/70 rounded-xl text-blue-700 transition-colors cursor-pointer"
-                              title="Change Book"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
 
                       {/* Dropdown for Book Matches */}
-                      {isBookDropdownOpen && !selectedBook && (
-                        <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-2xl z-50 max-h-60 overflow-y-auto divide-y divide-blue-50 p-1.5">
+                      {isBookDropdownOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-md z-50 max-h-64 overflow-y-auto divide-y divide-blue-50 p-1.5">
                           <div className="px-3 py-1.5 text-[10px] font-bold text-blue-700 uppercase tracking-wider flex items-center justify-between">
-                            <span>Available Books on Shelf ({filteredAvailableBooks.length})</span>
-                            <span className="text-slate-400 font-normal">Click to select</span>
+                            <span>Available Shelf Holdings ({filteredAvailableBooks.length})</span>
+                            <span className="text-slate-400 font-normal">Click "+ Add Book" to include</span>
                           </div>
                           {filteredAvailableBooks.length > 0 ? (
                             filteredAvailableBooks.map(b => {
                               const availCount = getBookAvailableCount(b);
+                              const alreadyAddedCount = selectedBooks.filter(sb => (sb.id && sb.id === b.id) || (sb.accession && sb.accession === b.accession)).length;
+                              const canAddMore = alreadyAddedCount < availCount;
+
                               return (
                                 <div
                                   key={b.barcode || b.id || b.accession}
                                   onClick={() => {
-                                    setSelectedBookBarcode(b.barcode || b.accession);
-                                    setBookSearchInput('');
-                                    setIsBookDropdownOpen(false);
+                                    if (canAddMore) handleAddBookToIssue(b);
                                   }}
-                                  className="p-2.5 hover:bg-blue-50/80 rounded-xl cursor-pointer transition-colors flex items-center justify-between gap-3 text-xs"
+                                  className={`p-2.5 rounded-xl transition-colors flex items-center justify-between gap-3 text-xs ${
+                                    canAddMore 
+                                      ? 'hover:bg-blue-50/80 cursor-pointer' 
+                                      : 'opacity-60 bg-zinc-50 cursor-not-allowed'
+                                  }`}
                                 >
                                   <div className="overflow-hidden">
                                     <div className="font-bold text-blue-950 flex items-center gap-2 truncate">
                                       <span>{b.title}</span>
                                       <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded">
-                                        #{b.accession}
+                                        Book #{getSingleBookNumber(b.barcode || b.accession)}
                                       </span>
                                     </div>
                                     <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5 truncate">
+                                      {(b.titleId || b.title_id) && (
+                                        <>
+                                          <span className="font-mono text-blue-700 font-semibold">ID: {b.titleId || b.title_id}</span>
+                                          <span>•</span>
+                                        </>
+                                      )}
+                                      <span>Acc: #{b.accession}</span>
+                                      <span>•</span>
                                       <span>Author: {b.author}</span>
                                       <span>•</span>
-                                      <span>Shelf: {b.shelf}</span>
+                                      <span>Shelf: {b.shelf || 'Central Stack'}</span>
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0">
                                     <span className="font-bold text-[10px] px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
                                       {availCount} In Stock
                                     </span>
-                                    <span className="px-2.5 py-1 text-[11px] font-bold bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white border border-blue-200 rounded-lg transition-colors">
-                                      Select Book
-                                    </span>
+                                    {canAddMore ? (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleAddBookToIssue(b);
+                                        }}
+                                        className="px-2.5 py-1 text-[11px] font-bold bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
+                                      >
+                                        + Add Book
+                                      </button>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-zinc-500 bg-zinc-200 px-2 py-1 rounded-lg">
+                                        In Basket ({alreadyAddedCount})
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
                               );
                             })
                           ) : (
                             <div className="p-3 text-center text-xs text-slate-400">
-                              No available books matching "{bookSearchInput}"
+                              No available books matching number or title "{bookSearchInput}"
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {/* Selected Books to Issue Basket */}
+                      {selectedBooks.length > 0 ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-[11px] font-bold text-blue-950 uppercase tracking-wider flex items-center justify-between">
+                            <span>Selected Books for Issue ({selectedBooks.length})</span>
+                            <span className="text-blue-600 font-medium">Search above to add more books</span>
+                          </div>
+
+                          <div className="space-y-2 max-h-60 overflow-y-auto">
+                            {selectedBooks.map((book, idx) => (
+                              <div
+                                key={`${book.id || book.accession}-${idx}`}
+                                className="p-3 bg-white border border-blue-200 rounded-xl flex items-center justify-between gap-3 text-xs"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                                    {idx + 1}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-bold text-zinc-900 truncate flex items-center gap-2">
+                                      <span>{book.title}</span>
+                                      <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded">
+                                        Book #{getSingleBookNumber(book.barcode || book.accession)}
+                                      </span>
+                                    </div>
+                                    <div className="text-[11px] text-zinc-500 mt-0.5 flex items-center gap-2">
+                                      <span>Acc: #{book.accession}</span>
+                                      <span>•</span>
+                                      <span>Author: {book.author}</span>
+                                      <span>•</span>
+                                      <span>Shelf: {book.shelf || 'Central Stack'}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveBookFromIssue(idx)}
+                                  className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
+                                  title="Remove from issue list"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3.5 bg-zinc-50 border border-dashed border-zinc-300 rounded-xl text-center text-xs text-zinc-500">
+                          No books selected yet. Type a book number (#) or title above to select and add books to issue.
                         </div>
                       )}
                     </div>
@@ -1423,7 +1571,7 @@ export default function BookIssuesReturnsView({
                             onClick={() => setDurationPreset(days)}
                             className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
                               durationPreset === days
-                                ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/25 ring-2 ring-blue-600/30'
+                                ? 'bg-blue-600 text-white border-blue-600  '
                                 : 'border-blue-200 text-blue-900 hover:bg-blue-100/70 bg-blue-50/40'
                             }`}
                           >
@@ -1435,7 +1583,7 @@ export default function BookIssuesReturnsView({
                           onClick={() => setDurationPreset('manual')}
                           className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
                             durationPreset === 'manual'
-                              ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/25 ring-2 ring-blue-600/30'
+                              ? 'bg-blue-600 text-white border-blue-600  '
                               : 'border-blue-200 text-blue-900 hover:bg-blue-100/70 bg-blue-50/40'
                           }`}
                         >
@@ -1483,18 +1631,18 @@ export default function BookIssuesReturnsView({
                         </button>
                         <button
                           type="submit"
-                          disabled={isSubmittingIssue || !selectedBook || selectedBookStock <= 0 || !selectedStudent || selectedStudent?.status === 'Frozen'}
-                          className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-40 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-2 shadow-md shadow-blue-600/25 cursor-pointer disabled:cursor-not-allowed"
+                          disabled={isSubmittingIssue || selectedBooks.length === 0 || !selectedStudent || selectedStudent?.status === 'Frozen'}
+                          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
                         >
                           {isSubmittingIssue ? (
                             <>
                               <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                              <span>Issuing Book...</span>
+                              <span>Issuing Books...</span>
                             </>
                           ) : (
                             <>
                               <Check className="w-4 h-4" />
-                              <span>Issue Book to Student</span>
+                              <span>Issue {selectedBooks.length > 1 ? `${selectedBooks.length} Books` : 'Book'} to Student</span>
                             </>
                           )}
                         </button>
@@ -1539,7 +1687,7 @@ export default function BookIssuesReturnsView({
 
                     {/* Return Desk SDMS Student Matches Dropdown */}
                     {isReturnDropdownOpen && returnSdmsResults.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto divide-y divide-blue-50 p-1">
+                      <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-md z-50 max-h-60 overflow-y-auto divide-y divide-blue-50 p-1">
                         <div className="px-3 py-1.5 text-[10px] font-semibold text-blue-600 uppercase tracking-wider flex items-center justify-between">
                           <span>SDMS Database Matches</span>
                           <span className="text-zinc-400 font-normal">{returnSdmsResults.length} found</span>
@@ -1615,7 +1763,7 @@ export default function BookIssuesReturnsView({
 
                   {/* Scanned Loan Check-in Card (Shown when a specific loan is scanned or clicked) */}
                   {selectedLoanForReturn && (
-                    <div className="border border-blue-200 rounded-2xl p-5 space-y-4 bg-gradient-to-r from-blue-50/80 via-blue-50/40 to-white shadow-xs">
+                    <div className="border border-blue-200 rounded-2xl p-5 space-y-4 bg-white shadow-xs">
                       <div className="flex items-center justify-between pb-2 border-b border-blue-200">
                         <div className="flex items-center gap-2">
                           <CheckCircle2 className="w-4 h-4 text-blue-600" />
@@ -1993,7 +2141,7 @@ export default function BookIssuesReturnsView({
                         type="button"
                         disabled={isImportingBulkCirc}
                         onClick={handleExecuteBulkCircImport}
-                        className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 flex items-center gap-2 cursor-pointer disabled:opacity-60"
+                        className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all  flex items-center gap-2 cursor-pointer disabled:opacity-60"
                       >
                         {isImportingBulkCirc ? (
                           <>
@@ -2366,7 +2514,7 @@ export default function BookIssuesReturnsView({
       {/* 3. Book Issue Details Popup Dialog */}
       {inspectingLoan && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 overflow-y-auto animate-in fade-in duration-200"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setInspectingLoan(null);
@@ -2374,7 +2522,7 @@ export default function BookIssuesReturnsView({
             }
           }}
         >
-          <div className="bg-white border border-blue-200/90 rounded-3xl shadow-2xl p-6 sm:p-8 w-full max-w-2xl max-h-[92vh] overflow-y-auto relative animate-in zoom-in-95 duration-200 space-y-6">
+          <div className="bg-white border border-blue-200/90 rounded-2xl shadow-md p-6 sm:p-8 w-full max-w-2xl max-h-[92vh] overflow-y-auto relative animate-in zoom-in-95 duration-200 space-y-6">
             {/* Header */}
             <div className="flex items-center justify-between pb-4 border-b border-blue-100">
               <div className="flex items-center gap-3">
@@ -2414,7 +2562,7 @@ export default function BookIssuesReturnsView({
             </div>
 
             {/* Borrower Card with enlarged SDMS Photo */}
-            <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-50/80 via-blue-50/40 to-white border border-blue-200 rounded-2xl flex items-center justify-between gap-4 shadow-xs">
+            <div className="p-4 sm:p-5 bg-white border border-blue-200 rounded-2xl flex items-center justify-between gap-4 shadow-xs">
               <div className="flex items-center gap-4">
                 <StudentSdmsPhoto 
                   student={inspectingStudent || {

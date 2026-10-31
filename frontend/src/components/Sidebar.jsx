@@ -123,30 +123,30 @@ export default function Sidebar({
 
   return (
     <aside 
-      className={`fixed top-0 left-0 bottom-0 z-40 bg-white border-r border-zinc-200/90 transition-all duration-200 ease-in-out flex flex-col justify-between select-none ${
+      className={`fixed top-0 left-0 bottom-0 z-40 bg-white border-r border-zinc-200 transition-all duration-200 ease-in-out flex flex-col justify-between select-none ${
         isCollapsed ? 'w-20' : 'w-64'
       }`}
     >
       {/* Top Header & Navigation */}
       <div>
         {/* Brand / Logo Section */}
-        <div className={`h-16 flex items-center border-b border-zinc-100 px-4 ${isCollapsed ? 'justify-center' : 'justify-between'}`}>
+        <div className={`h-16 flex items-center border-b border-zinc-200 px-4 ${isCollapsed ? 'justify-center' : 'justify-between'}`}>
           {!isCollapsed ? (
             <div className="flex items-center gap-3 overflow-hidden">
-              <div className="w-8 h-8 rounded-xl bg-zinc-900 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+              <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
                 <BookOpen className="w-4 h-4" />
               </div>
               <div className="flex flex-col overflow-hidden">
                 <span className="font-bold text-sm text-zinc-900 tracking-tight leading-none truncate">
                   Campus Library
                 </span>
-                <span className="text-[10px] font-medium text-zinc-400 truncate mt-1">
+                <span className="text-[10px] font-medium text-zinc-500 truncate mt-1">
                   Management Console
                 </span>
               </div>
             </div>
           ) : (
-            <div className="w-8 h-8 rounded-xl bg-zinc-900 text-white flex items-center justify-center font-bold text-sm shrink-0" title="Campus Library">
+            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0" title="Campus Library">
               <BookOpen className="w-4 h-4" />
             </div>
           )}
@@ -155,7 +155,7 @@ export default function Sidebar({
           {!isCollapsed && (
             <button
               onClick={() => setIsCollapsed(true)}
-              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors"
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors cursor-pointer"
               title="Collapse sidebar"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -168,7 +168,7 @@ export default function Sidebar({
           <div className="pt-2 px-2 flex justify-center">
             <button
               onClick={() => setIsCollapsed(false)}
-              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 transition-colors"
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 transition-colors cursor-pointer"
               title="Expand sidebar"
             >
               <ChevronRight className="w-4 h-4" />
@@ -187,17 +187,17 @@ export default function Sidebar({
                 key={item.id}
                 onClick={() => setCurrentTab(item.id)}
                 title={isCollapsed ? item.label : undefined}
-                className={`w-full group relative flex items-center rounded-xl text-xs font-medium transition-all ${
+                className={`w-full group relative flex items-center rounded-xl text-xs transition-colors cursor-pointer ${
                   isCollapsed ? 'justify-center p-3' : 'justify-between px-3.5 py-2.5'
                 } ${
                   active
-                    ? 'bg-zinc-900 text-white shadow-xs font-semibold'
-                    : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+                    ? 'bg-blue-600 text-white font-bold'
+                    : 'text-zinc-700 hover:bg-blue-50 hover:text-blue-700 font-medium'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <Icon className={`shrink-0 transition-transform group-hover:scale-105 ${
-                    active ? 'text-white' : 'text-zinc-400 group-hover:text-zinc-700'
+                  <Icon className={`shrink-0 ${
+                    active ? 'text-white' : 'text-zinc-500 group-hover:text-blue-700'
                   } ${isCollapsed ? 'w-5 h-5' : 'w-4 h-4'}`} />
 
                   {!isCollapsed && (
@@ -206,8 +206,8 @@ export default function Sidebar({
                 </div>
 
                 {!isCollapsed && item.badge && (
-                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
-                    active ? 'bg-white/15 text-white border-white/20' : item.badgeColor
+                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                    active ? 'bg-white/20 text-white border-white/30' : item.badgeColor
                   }`}>
                     {item.badge}
                   </span>
@@ -215,7 +215,7 @@ export default function Sidebar({
 
                 {/* Collapsed Tooltip */}
                 {isCollapsed && (
-                  <div className="absolute left-full ml-3 px-2.5 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50 shadow-md">
+                  <div className="absolute left-full ml-3 px-2.5 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
                     {item.label}
                   </div>
                 )}
@@ -226,16 +226,16 @@ export default function Sidebar({
       </div>
 
       {/* Bottom User Persona, Role Switcher & Logout */}
-      <div className="p-3 border-t border-zinc-100 space-y-2">
+      <div className="p-3 border-t border-zinc-200 space-y-2">
         {/* User Account Profile */}
         <div
-          className={`w-full rounded-xl border border-zinc-200/80 bg-zinc-50/70 ${
+          className={`w-full rounded-xl border border-zinc-200 bg-zinc-50 ${
             isCollapsed ? 'p-2 flex items-center justify-center' : 'p-2.5 flex items-center justify-between text-left'
           }`}
           title="Institutional User Account"
         >
           <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-7 h-7 rounded-lg bg-zinc-200 text-zinc-800 flex items-center justify-center text-xs font-bold shrink-0">
+            <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold shrink-0">
               {(currentUser?.full_name || activeRoleObj.title).charAt(0).toUpperCase()}
             </div>
             {!isCollapsed && (
@@ -243,7 +243,7 @@ export default function Sidebar({
                 <div className="text-xs font-bold text-zinc-900 truncate">
                   {currentUser?.full_name || activeRoleObj.title}
                 </div>
-                <div className="text-[10px] text-zinc-400 truncate">
+                <div className="text-[10px] text-zinc-500 truncate">
                   {currentUser?.role || activeRoleObj.title} • {currentUser?.patron_id || activeRoleObj.tag}
                 </div>
               </div>
@@ -255,7 +255,7 @@ export default function Sidebar({
         {onLogout && (
           <button
             onClick={onLogout}
-            className={`w-full rounded-xl border border-zinc-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-zinc-500 flex items-center justify-center transition-colors ${
+            className={`w-full rounded-xl border border-zinc-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-zinc-600 flex items-center justify-center transition-colors cursor-pointer ${
               isCollapsed ? 'h-9' : 'py-2 px-3 gap-2 text-xs font-medium'
             }`}
             title="Log Out Session"

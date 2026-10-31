@@ -16,8 +16,8 @@ export function UpiModal({ isOpen, onClose, fine, onConfirmPayment }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <QrCode className="w-5 h-5 text-blue-600" />
@@ -43,7 +43,7 @@ export function UpiModal({ isOpen, onClose, fine, onConfirmPayment }) {
           </div>
 
           {/* Scannable Authentic QR Code Box */}
-          <div className="mt-4 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 inline-block shadow-inner">
+          <div className="mt-4 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 inline-block ">
             <div className="w-44 h-44 bg-white p-2 rounded-xl flex flex-col items-center justify-center mx-auto shadow-sm">
               {/* Simulated QR Code Canvas */}
               <div className="w-40 h-40 grid grid-cols-6 grid-rows-6 gap-1 bg-white p-1">
@@ -77,7 +77,7 @@ export function UpiModal({ isOpen, onClose, fine, onConfirmPayment }) {
           <button
             onClick={handleSimulatePayment}
             disabled={processing}
-            className="mt-5 w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2"
+            className="mt-5 w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs sm:text-sm  transition-all flex items-center justify-center gap-2"
           >
             {processing ? (
               <span>Verifying UPI Gateway...</span>
@@ -106,8 +106,8 @@ export function WaiveModal({ isOpen, onClose, fine, onConfirmWaive }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-purple-600" />
@@ -150,7 +150,7 @@ export function WaiveModal({ isOpen, onClose, fine, onConfirmWaive }) {
 
           <button
             type="submit"
-            className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs shadow-md shadow-purple-500/20 transition-all"
+            className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs  transition-all"
           >
             Confirm Authorized Waiver
           </button>

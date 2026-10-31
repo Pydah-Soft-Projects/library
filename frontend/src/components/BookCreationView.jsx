@@ -696,8 +696,8 @@ export default function BookCreationView({
             onClick={() => setActiveTab('excel')}
             className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-xs ${
               activeTab === 'excel'
-                ? 'bg-emerald-700 text-white shadow-emerald-600/20'
-                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                ? 'bg-blue-700 text-white font-bold'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
             }`}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -706,7 +706,7 @@ export default function BookCreationView({
 
           <button
             onClick={() => setIsCreateBookModalOpen(true)}
-            className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
+            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Create Book</span>
@@ -741,7 +741,7 @@ export default function BookCreationView({
         <div className="p-4">
           <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider block">Physical Copies</span>
           <div className="text-2xl font-bold text-zinc-900 mt-0.5">{totalCopiesCount}</div>
-          <span className="text-[11px] text-emerald-600 mt-0.5 block font-medium">{totalAvailableCount} copies on shelf</span>
+          <span className="text-[11px] text-blue-600 mt-0.5 block font-medium">{totalAvailableCount} copies on shelf</span>
         </div>
 
         <div className="p-4">
@@ -763,7 +763,7 @@ export default function BookCreationView({
           onClick={() => setActiveTab('catalog')}
           className={`pb-3 transition-colors shrink-0 ${
             activeTab === 'catalog'
-              ? 'text-zinc-900 font-bold border-b-2 border-zinc-900'
+              ? 'text-blue-700 font-bold border-b-2 border-blue-600'
               : 'text-zinc-500 hover:text-zinc-900'
           }`}
         >
@@ -774,14 +774,14 @@ export default function BookCreationView({
           onClick={() => setActiveTab('excel')}
           className={`pb-3 transition-colors shrink-0 flex items-center gap-1.5 ${
             activeTab === 'excel'
-              ? 'text-emerald-700 font-bold border-b-2 border-emerald-600'
+              ? 'text-blue-700 font-bold border-b-2 border-blue-600'
               : 'text-zinc-500 hover:text-zinc-900'
           }`}
         >
-          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+          <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />
           <span>Excel Upload & Parser</span>
           {parsedBooks.length > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold">
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-100 text-blue-800 font-bold">
               {parsedBooks.length}
             </span>
           )}
@@ -791,7 +791,7 @@ export default function BookCreationView({
           onClick={() => setActiveTab('categories')}
           className={`pb-3 transition-colors shrink-0 ${
             activeTab === 'categories'
-              ? 'text-zinc-900 font-bold border-b-2 border-zinc-900'
+              ? 'text-blue-700 font-bold border-b-2 border-blue-600'
               : 'text-zinc-500 hover:text-zinc-900'
           }`}
         >
@@ -1016,7 +1016,7 @@ export default function BookCreationView({
                           onClick={() => setCatalogCurrentPage(item)}
                           className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                             item === safeCatalogPage
-                              ? 'bg-zinc-900 text-white shadow-2xs'
+                              ? 'bg-blue-600 text-white'
                               : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
                           }`}
                         >
@@ -1060,7 +1060,7 @@ export default function BookCreationView({
             <span>Dynamic categories replace rigid presets. Every category assigns an automatic accession prefix code to its copies.</span>
             <button
               onClick={() => setIsCategoryModalOpen(true)}
-              className="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-medium flex items-center gap-1"
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium flex items-center gap-1"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Create Category</span>
@@ -1072,7 +1072,7 @@ export default function BookCreationView({
               <div>No dynamic categories created yet.</div>
               <button
                 onClick={() => setIsCategoryModalOpen(true)}
-                className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-medium"
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium"
               >
                 + Create First Category
               </button>
@@ -1125,10 +1125,10 @@ export default function BookCreationView({
       {activeTab === 'excel' && (
         <div className="space-y-6">
           {/* Header & Template Download */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-gradient-to-r from-emerald-50/60 via-white to-white border border-emerald-200/80 rounded-2xl shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-white border border-blue-200 rounded-2xl">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg">
+                <span className="p-1.5 bg-blue-100 text-blue-700 rounded-lg">
                   <FileSpreadsheet className="w-5 h-5" />
                 </span>
                 <h2 className="text-base font-bold text-zinc-900">
@@ -1143,9 +1143,9 @@ export default function BookCreationView({
             <button
               type="button"
               onClick={handleDownloadSampleExcel}
-              className="px-4 py-2.5 bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-xs shrink-0 self-start sm:self-auto"
+              className="px-4 py-2.5 bg-white border border-blue-300 hover:bg-blue-50 text-blue-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-xs shrink-0 self-start sm:self-auto"
             >
-              <Download className="w-4 h-4 text-emerald-600" />
+              <Download className="w-4 h-4 text-blue-600" />
               <span>Download Sample Template (.xlsx)</span>
             </button>
           </div>
@@ -1169,7 +1169,7 @@ export default function BookCreationView({
                 <button
                   type="button"
                   onClick={() => onNavigate('all_books')}
-                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-xs"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-xs"
                 >
                   <BookOpen className="w-4 h-4" />
                   <span>View in All Books</span>
@@ -1180,7 +1180,7 @@ export default function BookCreationView({
                     setImportCompleted(false);
                     setUploadedFileName('');
                   }}
-                  className="px-3.5 py-2 bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-semibold transition-colors"
+                  className="px-3.5 py-2 bg-white border border-emerald-300 hover:bg-blue-100 text-blue-800 rounded-xl text-xs font-semibold transition-colors"
                 >
                   Upload Another File
                 </button>
@@ -1202,7 +1202,7 @@ export default function BookCreationView({
               onChange={handleFileUpload}
               className="hidden"
             />
-            <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center shadow-xs">
               <UploadCloud className="w-6 h-6" />
             </div>
             <div>
@@ -1236,7 +1236,7 @@ export default function BookCreationView({
 
                 <div className="bg-white p-3.5 rounded-xl border border-slate-200/70 shadow-2xs">
                   <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-emerald-600" />
+                    <Layers className="w-3.5 h-3.5 text-blue-600" />
                     <span>Total Copies</span>
                   </div>
                   <div className="text-xl font-bold text-emerald-700 mt-1 font-mono">
@@ -1294,7 +1294,7 @@ export default function BookCreationView({
                     type="button"
                     disabled={isImporting || parsedBooks.length === 0}
                     onClick={handleConfirmImport}
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-sm shadow-emerald-600/20 cursor-pointer"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-2  cursor-pointer"
                   >
                     {isImporting ? (
                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1315,7 +1315,7 @@ export default function BookCreationView({
                   <select
                     value={defaultUploadCategory}
                     onChange={(e) => setDefaultUploadCategory(e.target.value)}
-                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-emerald-600"
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-blue-600"
                   >
                     <option value="">General (Default for rows without category)</option>
                     {categories.map(c => (
@@ -1336,7 +1336,7 @@ export default function BookCreationView({
                     value={defaultUploadShelf}
                     onChange={(e) => setDefaultUploadShelf(e.target.value)}
                     placeholder="Central Stack"
-                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-emerald-600"
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-xs text-zinc-900 bg-white focus:outline-none focus:border-blue-600"
                   />
                   <span className="text-[10px] text-zinc-400 mt-0.5 block">Used when Alm WS.ID/Shelf is empty</span>
                 </div>
@@ -1351,7 +1351,7 @@ export default function BookCreationView({
                     value={excelSearchTerm}
                     onChange={(e) => setExcelSearchTerm(e.target.value)}
                     placeholder="Filter parsed books by title, author, accession, or category..."
-                    className="w-full pl-9 pr-4 py-2 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:outline-none focus:border-emerald-600"
+                    className="w-full pl-9 pr-4 py-2 border border-zinc-200 rounded-xl text-xs text-zinc-900 focus:outline-none focus:border-blue-600"
                   />
                 </div>
 
@@ -1568,7 +1568,7 @@ export default function BookCreationView({
                               onClick={() => setExcelCurrentPage(item)}
                               className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                                 item === safeExcelPage
-                                  ? 'bg-zinc-900 text-white shadow-2xs'
+                                  ? 'bg-blue-600 text-white'
                                   : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
                               }`}
                             >
@@ -1609,8 +1609,8 @@ export default function BookCreationView({
       {/* POPUP 1: CREATE BOOK MODAL (WITH SEQUENTIAL COPIES PREVIEW) */}
       {/* ============================================================ */}
       {isCreateBookModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-xl border border-zinc-200 shadow-2xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl border border-zinc-200 shadow-md max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
               <div>
                 <h3 className="font-bold text-base text-zinc-900">Create Book</h3>
@@ -1824,7 +1824,7 @@ export default function BookCreationView({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-medium flex items-center gap-1.5"
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium flex items-center gap-1.5"
                 >
                   <Check className="w-3.5 h-3.5" />
                   <span>Create Book ({copies} Copies)</span>
@@ -1839,8 +1839,8 @@ export default function BookCreationView({
       {/* POPUP 2: DYNAMIC CATEGORY CREATION MODAL */}
       {/* ============================================================ */}
       {isCategoryModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-xl border border-zinc-200 shadow-xl max-w-md w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl border border-zinc-200 shadow-md max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
               <div>
                 <h3 className="font-bold text-sm text-zinc-900">Create Dynamic Category</h3>
@@ -1910,7 +1910,7 @@ export default function BookCreationView({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg font-medium"
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium"
                 >
                   Save Category
                 </button>
@@ -1924,8 +1924,8 @@ export default function BookCreationView({
       {/* POPUP 3: VIEW COPIES & SERIAL NUMBERS MODAL */}
       {/* ============================================================ */}
       {viewingCopiesBook && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-xl border border-zinc-200 shadow-2xl max-w-xl w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl border border-zinc-200 shadow-md max-w-xl w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
               <div>
                 <h3 className="font-bold text-sm text-zinc-900">{viewingCopiesBook.title}</h3>

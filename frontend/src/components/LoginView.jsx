@@ -67,7 +67,7 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
           )}
           {/* Header */}
           <div className="text-center space-y-2">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-zinc-900 text-white shadow-xs mb-1">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 text-white shadow-xs mb-1">
               <BookOpen className="w-6 h-6" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-zinc-900">
@@ -102,7 +102,7 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   placeholder="e.g. 2145 or superadmin"
-                  className="w-full pl-10 pr-3.5 py-2.5 border border-zinc-200 rounded-xl text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors"
+                  className="w-full pl-10 pr-3.5 py-2.5 border border-zinc-200 rounded-xl text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 transition-colors"
                 />
               </div>
             </div>
@@ -122,7 +122,7 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full pl-10 pr-10 py-2.5 border border-zinc-200 rounded-xl text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors"
+                  className="w-full pl-10 pr-10 py-2.5 border border-zinc-200 rounded-xl text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 transition-colors"
                 />
                 <button
                   type="button"
@@ -139,7 +139,7 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-2.5 px-4 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white rounded-xl font-medium text-xs transition-colors flex items-center justify-center gap-2 shadow-xs mt-3 cursor-pointer"
+              className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-medium text-xs transition-colors flex items-center justify-center gap-2 shadow-xs mt-3 cursor-pointer"
             >
               {isLoading ? (
                 <>

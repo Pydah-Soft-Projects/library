@@ -18,6 +18,8 @@ async function getBooks(req, res) {
       query.$or = [
         { title: { $regex: term, $options: 'i' } },
         { author: { $regex: term, $options: 'i' } },
+        { title_id: { $regex: term, $options: 'i' } },
+        { titleId: { $regex: term, $options: 'i' } },
         { accession: { $regex: term, $options: 'i' } },
         { barcode: { $regex: term, $options: 'i' } },
         { shelf: { $regex: term, $options: 'i' } },
