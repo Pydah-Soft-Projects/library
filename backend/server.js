@@ -18,6 +18,8 @@ const roleController = require('./src/controllers/roleController');
 const hrmsController = require('./src/controllers/hrmsController');
 const sdmsController = require('./src/controllers/sdmsController');
 const settingsController = require('./src/controllers/settingsController');
+const { getHrmsConnection } = require('./src/services/hrmsService');
+const { getPool } = require('./src/services/sdmsService');
 const { getAuditLogs, logAudit } = require('./src/services/auditService');
 
 const User = require('./src/models/User');
@@ -31,12 +33,12 @@ const { authenticateToken } = require('./src/middleware/authMiddleware');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Connect to MongoDB Atlas
+// 1. Connect to MongoDB Atlas (Main Library Database)
 const mongoUri = process.env.MongoDB_URI || process.env.MONGODB_URI;
 if (mongoUri) {
   mongoose.connect(mongoUri)
     .then(async () => {
-      console.log('🍃 Successfully connected to MongoDB Atlas database');
+      console.log('🍃 Successfully connected to MongoDB Atlas database (Library Catalog & Operations)');
       // Ensure baseline roles and settings exist in database
       await roleController.ensureSeedRoles();
       const existingSettings = await Setting.findOne({ key: 'system_settings' });
@@ -52,13 +54,45 @@ if (mongoUri) {
   console.warn('⚠️ MongoDB URI not found in environment variables (MongoDB_URI)');
 }
 
+// 2. Initialize & Verify HRMS Connection (Institutional Staff & Authentication)
+try {
+  const hrmsConn = getHrmsConnection();
+  hrmsConn.asPromise().then(() => {
+    console.log('🍃 Successfully connected to HRMS MongoDB database (Institutional Staff & Auth)');
+  }).catch(err => {
+    console.warn('⚠️ HRMS MongoDB connection warning:', err.message);
+  });
+} catch (err) {
+  console.warn('⚠️ HRMS connection error:', err.message);
+}
+
+// 3. Initialize & Verify SDMS Connection (Student Database MySQL RDS)
+try {
+  const sdmsPool = getPool();
+  sdmsPool.query('SELECT 1').then(() => {
+    console.log('🍃 Successfully connected to SDMS MySQL RDS database (Student Database & Enrollment)');
+  }).catch(err => {
+    console.warn('⚠️ SDMS MySQL connection warning:', err.message);
+  });
+} catch (err) {
+  console.warn('⚠️ SDMS connection error:', err.message);
+}
+
 // Middlewares
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // 1. Health & Status
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  const hrmsConn = getHrmsConnection();
+  let sdmsStatus = 'DISCONNECTED';
+  try {
+    const p = getPool();
+    await p.query('SELECT 1');
+    sdmsStatus = 'CONNECTED';
+  } catch {}
+
   res.json({
     status: 'UP',
     framework: 'Node.js + Express.js',
@@ -67,6 +101,13 @@ app.get('/api/health', (req, res) => {
     cron_jobs: 'RUNNING',
     database: 'MongoDB Atlas',
     mongo_status: mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
+    hrms_status: hrmsConn && hrmsConn.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
+    sdms_status: sdmsStatus,
+    databases: {
+      mongodb: mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
+      hrms: hrmsConn && hrmsConn.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
+      sdms: sdmsStatus
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -379,7 +420,9 @@ app.listen(PORT, () => {
   console.log(`🚀 LibraryManagement Express REST API running on port ${PORT}`);
   console.log(`   Base URL: http://localhost:${PORT}/api`);
   console.log(`   Health:   http://localhost:${PORT}/api/health`);
-  console.log(`   Database: MongoDB Atlas (Fully Dynamic Persistence)`);
+  console.log(`   Database: MongoDB Atlas (Library Catalog, Loans & Fines)`);
+  console.log(`   HRMS:     MongoDB Atlas (Staff Authentication & Departments)`);
+  console.log(`   SDMS:     AWS RDS MySQL (Student Database & Enrollment)`);
   console.log(`   Cron:     Automated Overdue & Penalty Scheduler active`);
   console.log(`=======================================================`);
 });
