@@ -1,7 +1,6 @@
 import React from 'react';
 import { 
-  BookOpen, Plus, ArrowLeftRight, Users, AlertTriangle, 
-  TrendingUp, Clock, ChevronRight, ShieldCheck, Database
+  Plus, ArrowLeftRight
 } from 'lucide-react';
 
 export default function DashboardView({
@@ -12,14 +11,34 @@ export default function DashboardView({
   hrmsUsersCount = 1,
   auditLogs = [],
   onNavigate,
+  onOpenReturns,
   onOpenUpiModal,
   onOpenWaiveModal
 }) {
   const totalTitles = books.length;
   const totalCopies = books.reduce((sum, b) => sum + (b.total !== undefined ? Number(b.total) : (Number(b.total_copies) || 0)), 0);
   const availableCopies = books.reduce((sum, b) => sum + (b.available !== undefined ? Number(b.available) : (Number(b.total) || 0)), 0);
-  const activeLoans = loans.filter(l => l.status !== 'Returned');
-  const overdueLoans = loans.filter(l => l.status === 'Overdue');
+  const activeLoans = loans.filter(l =>
+    String(l.status || '').trim().toLowerCase() !== 'returned' &&
+    !(l.return_date || l.returnDate || l.returned_at || l.returnedAt || l.returned_date)
+  );
+  const dateKey = (value) => {
+    if (!value) return '';
+    const raw = String(value).trim();
+    const isoDate = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoDate) return isoDate[1];
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+  };
+  const today = dateKey(new Date());
+  const dueTodayLoans = activeLoans.filter(loan =>
+    dateKey(loan.due_date || loan.dueDate || loan.dueDateFormatted) === today
+  );
+  const overdueLoans = activeLoans.filter(loan => {
+    const dueDate = dateKey(loan.due_date || loan.dueDate || loan.dueDateFormatted);
+    return dueDate && dueDate < today;
+  });
   const unpaidFines = fines.filter(f => f.status === 'Unpaid' || f.status === 'Pending');
   const totalFineAmount = unpaidFines.reduce((sum, f) => sum + Number(f.amount || 0), 0);
   const activePatrons = students.filter(s => s.status !== 'Frozen').length;
@@ -51,10 +70,17 @@ export default function DashboardView({
       highlight: false
     },
     {
-      label: 'Overdue Defaults',
+      label: 'Due Today',
+      value: dueTodayLoans.length.toLocaleString(),
+      sub: 'Books due for return today',
+      tab: 'admin_fines',
+      highlight: dueTodayLoans.length > 0
+    },
+    {
+      label: 'Past Due',
       value: overdueLoans.length.toLocaleString(),
-      sub: overdueLoans.length > 0 ? 'Accounts on penalty hold' : 'No overdue accounts',
-      tab: 'book_issues_returns',
+      sub: 'Return date has passed',
+      tab: 'admin_fines',
       highlight: overdueLoans.length > 0
     },
     {
@@ -74,29 +100,29 @@ export default function DashboardView({
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Main Heading Only & Quick Action Buttons */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b-2 border-zinc-200">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-200">
         <div>
-          <h1 className="text-3xl font-black tracking-tight text-zinc-950">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-950">
             Dashboard
           </h1>
-          <p className="text-xs font-bold text-zinc-800 mt-1">
+          <p className="text-xs text-zinc-600 mt-1">
             Real-time library holdings, circulation desk volume, and member accounts
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 self-start sm:self-auto">
+        <div className="flex items-center gap-2 self-start sm:self-auto">
           <button
             onClick={() => onNavigate('book_creation')}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>Create Book</span>
           </button>
           <button
             onClick={() => onNavigate('book_issues_returns')}
-            className="px-4 py-2 border-2 border-blue-600 text-blue-600 hover:bg-blue-50 text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 border border-blue-600 text-blue-600 hover:bg-blue-50 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
           >
             <ArrowLeftRight className="w-3.5 h-3.5 stroke-[2.5] text-blue-600" />
             <span>Issues & Returns</span>
@@ -104,109 +130,87 @@ export default function DashboardView({
         </div>
       </div>
 
-      {/* Bold Dark Themed Metric Strip */}
-      <div className="border-t-2 border-b-2 border-zinc-300 divide-y sm:divide-y-0 sm:divide-x-2 divide-zinc-200 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 py-2 bg-zinc-100">
+      {/* Compact operational metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
         {metrics.map((m, i) => (
           <div
             key={i}
             onClick={() => onNavigate(m.tab)}
-            className="p-4 cursor-pointer hover:bg-zinc-200 transition-colors flex flex-col justify-between"
+            className="min-w-0 p-3 rounded-lg border border-zinc-200 bg-white cursor-pointer hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
           >
-            <span className="text-xs font-black text-zinc-900 uppercase tracking-wider block mb-1.5">
+            <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide block mb-1">
               {m.label}
             </span>
-            <div>
-              <div className={`text-3xl font-black tracking-tight ${m.highlight ? 'text-rose-700' : 'text-zinc-950'}`}>
-                {m.value}
-              </div>
-              <span className="text-xs text-zinc-800 font-bold mt-1.5 block">
-                {m.sub}
-              </span>
+            <div className={`text-2xl font-bold tracking-tight ${m.highlight ? 'text-rose-700' : 'text-zinc-950'}`}>
+              {m.value}
             </div>
+            <span className="text-[10px] text-zinc-500 mt-1 block leading-snug">{m.sub}</span>
           </div>
         ))}
       </div>
 
-      {/* Full-Width Data Section: Active Circulations */}
-      <div className="space-y-4 pt-2">
-        <div className="flex items-center justify-between pb-2 border-b-2 border-zinc-200">
-          <h2 className="text-sm font-black text-zinc-950 uppercase tracking-wider flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-            <span>Active Circulations ({activeLoans.length})</span>
-          </h2>
-          <button
-            onClick={() => onNavigate('book_issues_returns')}
-            className="text-xs font-black text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
-          >
-            <span>Circulation Desk</span>
-            <ChevronRight className="w-3.5 h-3.5 stroke-[2.5]" />
-          </button>
-        </div>
-
-        {activeLoans.length === 0 ? (
-          <div className="py-14 text-center text-xs font-bold text-zinc-700 bg-zinc-100 rounded-2xl border-2 border-dashed border-zinc-300">
-            No books currently on loan. All physical copies are resting on library shelves.
-          </div>
-        ) : (
-          <div className="border-2 border-zinc-200 rounded-2xl overflow-hidden bg-white">
-            <div className="divide-y-2 divide-zinc-100">
-              {activeLoans.map(loan => {
-                const isOverdue = loan.status === 'Overdue';
-                return (
-                  <div
-                    key={loan.id}
-                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-zinc-50 transition-colors"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="font-black text-zinc-950 text-base">
-                        {loan.bookTitle}
+      <div className="grid lg:grid-cols-2 gap-3">
+        {[
+          { title: 'Due Today', loans: dueTodayLoans, tone: 'blue' },
+          { title: 'Past Due', loans: overdueLoans, tone: 'rose' }
+        ].map(queue => (
+          <section key={queue.title} className="min-w-0 rounded-lg border border-zinc-200 bg-white overflow-hidden">
+            <div className="px-3 py-2 flex items-center justify-between border-b border-zinc-100">
+              <h2 className="text-xs font-semibold text-zinc-800">{queue.title}</h2>
+              <span className={`text-[11px] font-semibold ${queue.tone === 'rose' ? 'text-rose-700' : 'text-blue-700'}`}>
+                {queue.loans.length}
+              </span>
+            </div>
+            {queue.loans.length === 0 ? (
+              <p className="px-3 py-4 text-xs text-zinc-500">No books in this return queue.</p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto divide-y divide-zinc-100">
+                {queue.loans.map((loan, index) => {
+                  const borrowerName = loan.patronName || loan.patron_name || 'Unknown borrower';
+                  const dueDate = loan.dueDateFormatted || loan.dueDate || loan.due_date || '—';
+                  const bookNumber = getSingleBookNumber(loan.accession || loan.barcode || loan.bookBarcode || loan.book_barcode);
+                  const bookTitle = loan.bookTitle || loan.book_title || 'Unknown book';
+                  const isPastDue = queue.tone === 'rose';
+                  return (
+                    <div key={loan.id || loan._id || `${loan.patronId || loan.patron_id}-${loan.accession || index}`} className="px-3 py-2.5 flex items-center justify-between gap-3 hover:bg-zinc-50">
+                      <div className="min-w-0">
+                        {isPastDue ? (
+                          <>
+                            <div className="flex items-baseline justify-between gap-3">
+                              <div className="text-xs font-bold text-zinc-900 truncate">{borrowerName}</div>
+                              <div className="shrink-0 text-[11px] font-semibold text-rose-700">Due: {dueDate}</div>
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-zinc-500 truncate">{bookTitle} <span className="mx-1 text-zinc-300">•</span> <span className="font-mono">#{bookNumber}</span></div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-xs font-semibold text-zinc-900 truncate">{bookTitle}</div>
+                            <div className="mt-0.5 text-[11px] text-zinc-500 truncate">
+                              {borrowerName}
+                              <span className="mx-1.5 text-zinc-300">•</span>
+                              <span className="font-mono">#{bookNumber}</span>
+                              <span className="mx-1.5 text-zinc-300">•</span>
+                              Due {dueDate}
+                            </div>
+                          </>
+                        )}
                       </div>
-                      <div className="text-xs font-bold text-zinc-800 mt-1.5 flex flex-wrap items-center gap-2">
-                        <span>Borrower: <strong className="text-zinc-950 font-black">{loan.patronName}</strong> (<span className="text-zinc-900 font-bold">{loan.patronId}</span>)</span>
-                        <span className="text-zinc-400">•</span>
-                        <span>Book No: <span className="font-mono font-black text-zinc-950">#{getSingleBookNumber(loan.barcode || loan.accession)}</span></span>
-                        <span className="text-zinc-400">•</span>
-                        <span>Due Date: <strong className="font-black text-zinc-950">{loan.dueDateFormatted || loan.dueDate}</strong></span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-auto">
-                      {isOverdue ? (
-                        <span className="px-3 py-1 rounded-lg text-xs font-black bg-rose-100 text-rose-950 border border-rose-300">
-                          Overdue
-                        </span>
-                      ) : (
-                        <span className="px-3 py-1 rounded-lg text-xs font-black text-emerald-950 bg-emerald-100 border border-emerald-300">
-                          On Schedule
-                        </span>
-                      )}
                       <button
-                        onClick={() => onNavigate('book_issues_returns')}
-                        className="text-xs font-black text-blue-600 hover:bg-blue-50 px-3.5 py-1.5 border border-blue-200 rounded-lg transition-colors cursor-pointer"
+                        type="button"
+                        onClick={() => onOpenReturns ? onOpenReturns() : onNavigate('admin_fines')}
+                        className="shrink-0 rounded-md border border-blue-200 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
                       >
-                        Desk Ops →
+                        Return
                       </button>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div className="pt-2 flex items-center justify-between text-xs font-bold text-zinc-900 border-t-2 border-zinc-200">
-          <span className="flex items-center gap-1.5 font-bold">
-            <Database className="w-4 h-4 text-blue-600 stroke-[2.5]" />
-            <span className="text-zinc-950 font-extrabold">MongoDB Atlas Connected • Dynamic Persistent Catalog</span>
-          </span>
-          <button
-            onClick={() => onNavigate('settings')}
-            className="text-blue-600 font-black hover:text-blue-800 hover:underline cursor-pointer"
-          >
-            System Settings →
-          </button>
-        </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        ))}
       </div>
+
     </div>
   );
 }

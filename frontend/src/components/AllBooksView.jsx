@@ -5,25 +5,49 @@ import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 
+const normalizeSearchText = value => String(value || '').trim().toLowerCase().replace(/^#\s*/, '').replace(/[\s\-_]/g, '');
+const searchMatchRank = (value, query) => {
+  const normalizedValue = normalizeSearchText(value);
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedValue || !normalizedQuery) return Number.POSITIVE_INFINITY;
+  if (normalizedValue === normalizedQuery) return 0;
+  if (normalizedValue.startsWith(normalizedQuery)) return 1;
+  return normalizedValue.includes(normalizedQuery) ? 2 : Number.POSITIVE_INFINITY;
+};
+
 export default function AllBooksView({
   books = [],
   loans = [],
   onUpdateBook,
   onDeleteBook,
   onSelectIssue,
+  onRefresh,
   onNavigate,
   onToast
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [activeTab, setActiveTab] = useState('available'); // 'available' (first) | 'total' (second)
+  const [activeTab, setActiveTab] = useState('available'); // 'available' | 'total' | 'issued'
   const [viewMode, setViewMode] = useState('table'); // 'table' | 'grid'
   const [editingBook, setEditingBook] = useState(null);
   const [viewingCopiesBook, setViewingCopiesBook] = useState(null);
+  const activeLoans = useMemo(() => loans.filter(loan =>
+    loan &&
+    String(loan.status || '').trim().toLowerCase() !== 'returned' &&
+    !(loan.return_date || loan.returnDate || loan.returned_at || loan.returnedAt || loan.returned_date)
+  ), [loans]);
 
   // Dynamic Pagination State (dynamically changeable count)
   const [pageSize, setPageSize] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
+  const handlePageChange = (page) => {
+    setCurrentPage(page);
+    onRefresh?.();
+  };
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    onRefresh?.();
+  };
 
   // Reset to first section whenever search filter, category, tab, or page size changes
   useEffect(() => {
@@ -58,8 +82,6 @@ export default function AllBooksView({
     return { totalCopies: tot, availableCopies: avail };
   }, [books]);
 
-  const circulatingCopies = Math.max(0, totalCopies - availableCopies);
-
   const formatAccessionRange = (acc) => {
     if (!acc) return '—';
     const str = String(acc).trim();
@@ -73,23 +95,33 @@ export default function AllBooksView({
   const filteredBooks = useMemo(() => {
     const q = searchTerm.toLowerCase().trim();
     const cleanNum = q.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
-    return books.filter(b => {
-      const matchCat = selectedCategory === 'All' || b.category === selectedCategory;
-      const tId = String(b.titleId || b.title_id || '').toLowerCase();
-      const matchQuery = !q ||
-        (b.title && b.title.toLowerCase().includes(q)) ||
-        (b.author && b.author.toLowerCase().includes(q)) ||
-        (tId && tId.includes(q)) ||
-        (cleanNum && tId && tId.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
-        (b.accession && b.accession.toLowerCase().includes(q)) ||
-        (cleanNum && b.accession && b.accession.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
-        (b.barcode && b.barcode.toLowerCase().includes(q)) ||
-        (cleanNum && b.barcode && b.barcode.replace(/[\s\-_]/g, '').includes(cleanNum)) ||
-        (b.shelf && b.shelf.toLowerCase().includes(q)) ||
-        (b.isbn && b.isbn.toLowerCase().includes(q));
-
-      return matchCat && matchQuery;
+    const rankedBooks = books.map((book, index) => {
+      const copyIdentifiers = (book.copies_detail || []).flatMap(copy => [
+        copy.accession, copy.barcode, copy.serial_no
+      ]);
+      const identifierValues = [
+        book.accession, book.barcode, book.titleId, book.title_id, ...copyIdentifiers
+      ];
+      const textValues = [book.title, book.author, book.shelf, book.isbn];
+      const allValues = [...identifierValues, ...textValues];
+      const matchCat = selectedCategory === 'All' || book.category === selectedCategory;
+      const matchQuery = !q || allValues.some(value =>
+        String(value || '').toLowerCase().includes(q) ||
+        (cleanNum && normalizeSearchText(value).includes(cleanNum))
+      );
+      const identifierRank = Math.min(...identifierValues.map(value => searchMatchRank(value, q)));
+      const textRank = Math.min(...textValues.map(value => searchMatchRank(value, q)));
+      return {
+        book,
+        index,
+        matches: matchCat && matchQuery,
+        rank: Math.min(identifierRank, Number.isFinite(textRank) ? textRank + 3 : textRank)
+      };
     });
+    return rankedBooks
+      .filter(item => item.matches)
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map(item => item.book);
   }, [books, selectedCategory, searchTerm]);
 
   // Flat list of available copies (only computed when activeTab === 'available' for fast loading)
@@ -156,15 +188,68 @@ export default function AllBooksView({
           if (!matches) continue;
         }
 
-        result.push(item);
+        const codeRank = Math.min(
+          searchMatchRank(item.accession, q),
+          searchMatchRank(item.barcode, q),
+          searchMatchRank(item.serial_no, q),
+          searchMatchRank(item.titleId, q)
+        );
+        const titleRank = Math.min(
+          searchMatchRank(item.title, q),
+          searchMatchRank(item.author, q)
+        );
+        result.push({
+          item,
+          rank: Math.min(codeRank, Number.isFinite(titleRank) ? titleRank + 3 : titleRank)
+        });
       }
     }
 
-    return result;
+    if (!q) return result.map(entry => entry.item);
+    return result
+      .sort((a, b) => a.rank - b.rank ||
+        String(a.item.accession).localeCompare(String(b.item.accession), undefined, { numeric: true }))
+      .map(entry => entry.item);
   }, [books, selectedCategory, searchTerm, activeTab]);
 
+  const filteredIssuedLoans = useMemo(() => {
+    const q = searchTerm.toLowerCase().trim();
+    const rankedLoans = activeLoans.map((loan, index) => {
+      const linkedBook = books.find(book =>
+        String(book.id || book._id || '') === String(loan.bookId || loan.book_id || '')
+      ) || books.find(book =>
+        String(book.title || '').trim().toLowerCase() === String(loan.bookTitle || loan.book_title || '').trim().toLowerCase()
+      );
+      const matchesCategory = selectedCategory === 'All' || (linkedBook?.category || 'General') === selectedCategory;
+      const codeValues = [loan.accession, loan.bookBarcode, loan.book_barcode];
+      const textValues = [
+        loan.bookTitle, loan.book_title,
+        loan.patronName, loan.patron_name, loan.patronId, loan.patron_id,
+        loan.department, linkedBook?.author, linkedBook?.shelf, linkedBook?.category
+      ];
+      const identifierRank = Math.min(...codeValues.map(value => searchMatchRank(value, q)));
+      const textRank = Math.min(...textValues.map(value => searchMatchRank(value, q)));
+      const rank = !q
+        ? 0
+        : identifierRank === 0 || textRank === 0
+          ? 0
+          : Number.isFinite(identifierRank)
+            ? identifierRank + 1
+            : Number.isFinite(textRank)
+              ? textRank + 2
+              : Number.POSITIVE_INFINITY;
+      return { loan, index, matches: matchesCategory && Number.isFinite(rank), rank };
+    });
+    return rankedLoans
+      .filter(item => item.matches)
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map(item => item.loan);
+  }, [activeLoans, books, searchTerm, selectedCategory]);
+
   // Dynamic Pagination Calculations
-  const currentItemsCount = activeTab === 'available' ? availableCopiesList.length : filteredBooks.length;
+  const currentItemsCount = activeTab === 'available'
+    ? availableCopiesList.length
+    : activeTab === 'issued' ? filteredIssuedLoans.length : filteredBooks.length;
   const totalPages = Math.max(1, Math.ceil(currentItemsCount / pageSize));
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
   const startItem = currentItemsCount === 0 ? 0 : (safePage - 1) * pageSize + 1;
@@ -172,6 +257,7 @@ export default function AllBooksView({
 
   // Paginated Slices for Loading by Section
   const paginatedAvailableCopies = availableCopiesList.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const paginatedIssuedLoans = filteredIssuedLoans.slice((safePage - 1) * pageSize, safePage * pageSize);
   const paginatedTotalBooks = filteredBooks.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const handleEditSubmit = (e) => {
@@ -204,26 +290,28 @@ export default function AllBooksView({
         </button>
       </div>
 
-      {/* Summary Statistics Strip (1st Place Available, 2nd Place Total) */}
+      {/* Summary Statistics Strip */}
       <div className="border-t border-b border-zinc-200 grid grid-cols-2 lg:grid-cols-4 py-2 divide-y sm:divide-y-0 sm:divide-x divide-zinc-200 bg-zinc-50/40">
+        <div className="p-4 bg-blue-50/20">
+          <span className="text-[11px] font-semibold text-blue-800 uppercase tracking-wider block">Total Copies</span>
+          <div className="text-2xl font-bold text-blue-900 mt-0.5">
+            {totalCopies.toLocaleString()}
+          </div>
+          <span className="text-[11px] text-blue-600 mt-0.5 block font-medium">
+            Across {books.length.toLocaleString()} catalog titles
+          </span>
+        </div>
+
         <div className="p-4 bg-emerald-50/30">
-          <span className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider block">1. Available on Shelf</span>
+          <span className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider block">Available Copies</span>
           <div className="text-2xl font-bold text-emerald-700 mt-0.5">{availableCopies.toLocaleString()}</div>
           <span className="text-[11px] text-emerald-700 mt-0.5 block font-medium">Ready to borrow now</span>
         </div>
 
-        <div className="p-4 bg-blue-50/20">
-          <span className="text-[11px] font-semibold text-blue-800 uppercase tracking-wider block">2. Total Library Books</span>
-          <div className="text-2xl font-bold text-blue-900 mt-0.5">
-            {books.length.toLocaleString()} <span className="text-sm font-normal text-blue-700">({totalCopies.toLocaleString()} copies)</span>
-          </div>
-          <span className="text-[11px] text-blue-600 mt-0.5 block font-medium">Full catalog holdings</span>
-        </div>
-
         <div className="p-4">
-          <span className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider block">Currently Issued</span>
-          <div className="text-2xl font-bold text-amber-900 mt-0.5">{circulatingCopies.toLocaleString()}</div>
-          <span className="text-[11px] text-amber-700 mt-0.5 block">Books with students</span>
+          <span className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider block">Issued Copies</span>
+          <div className="text-2xl font-bold text-amber-900 mt-0.5">{activeLoans.length.toLocaleString()}</div>
+          <span className="text-[11px] text-amber-700 mt-0.5 block">Copies currently out</span>
         </div>
 
         <div className="p-4">
@@ -233,11 +321,11 @@ export default function AllBooksView({
         </div>
       </div>
 
-      {/* 2 Primary Tabs: 1st Available Copies, 2nd Total Books */}
+      {/* Inventory tabs */}
       <div className="flex items-center gap-6 border-b border-zinc-200">
         <button
           type="button"
-          onClick={() => setActiveTab('available')}
+          onClick={() => handleTabChange('available')}
           className={`pb-3 text-sm font-semibold transition-colors flex items-center gap-2 border-b-2 cursor-pointer ${
             activeTab === 'available'
               ? 'border-emerald-600 text-emerald-700 font-bold'
@@ -254,7 +342,7 @@ export default function AllBooksView({
 
         <button
           type="button"
-          onClick={() => setActiveTab('total')}
+          onClick={() => handleTabChange('total')}
           className={`pb-3 text-sm font-semibold transition-colors flex items-center gap-2 border-b-2 cursor-pointer ${
             activeTab === 'total'
               ? 'border-blue-600 text-blue-700 font-bold'
@@ -266,6 +354,23 @@ export default function AllBooksView({
             activeTab === 'total' ? 'bg-blue-100 text-blue-800' : 'bg-zinc-100 text-zinc-600'
           }`}>
             {books.length.toLocaleString()} ({totalCopies.toLocaleString()} Copies)
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabChange('issued')}
+          className={`pb-3 text-sm font-semibold transition-colors flex items-center gap-2 border-b-2 cursor-pointer ${
+            activeTab === 'issued'
+              ? 'border-amber-600 text-amber-700 font-bold'
+              : 'border-transparent text-zinc-500 hover:text-zinc-900'
+          }`}
+        >
+          <span>Issued Books</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            activeTab === 'issued' ? 'bg-amber-100 text-amber-800' : 'bg-zinc-100 text-zinc-600'
+          }`}>
+            {activeLoans.length.toLocaleString()}
           </span>
         </button>
       </div>
@@ -280,7 +385,9 @@ export default function AllBooksView({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search books by title, author, Title ID, book number, or shelf..."
+              placeholder={activeTab === 'issued'
+                ? 'Search issued books by title, book number, borrower, or member ID...'
+                : 'Search books by title, author, Title ID, book number, or shelf...'}
               className="w-full pl-9 pr-3 py-2 text-xs border border-zinc-200 rounded-lg text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 transition-colors"
             />
           </div>
@@ -294,6 +401,7 @@ export default function AllBooksView({
                 onChange={(e) => {
                   setPageSize(Number(e.target.value));
                   setCurrentPage(1);
+                  onRefresh?.();
                 }}
                 className="px-2 py-1.5 border border-zinc-200 rounded-lg text-xs font-semibold text-zinc-800 bg-white focus:outline-none focus:border-blue-600 cursor-pointer"
                 title="Change items per page"
@@ -306,26 +414,28 @@ export default function AllBooksView({
               </select>
             </div>
 
-            <div className="flex items-center border border-zinc-200 rounded-lg p-0.5">
-              <button
-                onClick={() => setViewMode('table')}
-                className={`p-1 rounded-md transition-colors ${
-                  viewMode === 'table' ? 'bg-blue-50 text-blue-700' : 'text-zinc-400 hover:text-zinc-600'
-                }`}
-                title="Table View"
-              >
-                <List className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`p-1 rounded-md transition-colors ${
-                  viewMode === 'grid' ? 'bg-blue-50 text-blue-700' : 'text-zinc-400 hover:text-zinc-600'
-                }`}
-                title="Grid View"
-              >
-                <LayoutGrid className="w-4 h-4" />
-              </button>
-            </div>
+            {activeTab !== 'issued' && (
+              <div className="flex items-center border border-zinc-200 rounded-lg p-0.5">
+                <button
+                  onClick={() => setViewMode('table')}
+                  className={`p-1 rounded-md transition-colors ${
+                    viewMode === 'table' ? 'bg-blue-50 text-blue-700' : 'text-zinc-400 hover:text-zinc-600'
+                  }`}
+                  title="Table View"
+                >
+                  <List className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setViewMode('grid')}
+                  className={`p-1 rounded-md transition-colors ${
+                    viewMode === 'grid' ? 'bg-blue-50 text-blue-700' : 'text-zinc-400 hover:text-zinc-600'
+                  }`}
+                  title="Grid View"
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -480,6 +590,63 @@ export default function AllBooksView({
             ))}
           </div>
         )
+      ) : activeTab === 'issued' ? (
+        filteredIssuedLoans.length === 0 ? (
+          <div className="py-16 text-center border-t border-b border-zinc-200">
+            <p className="text-xs text-zinc-500">No issued books currently match your search or filter.</p>
+            <button
+              onClick={() => { setSearchTerm(''); setSelectedCategory('All'); }}
+              className="mt-2 text-xs font-medium text-zinc-900 underline"
+            >
+              Clear Filters
+            </button>
+          </div>
+        ) : (
+          <div className="border-t border-b border-zinc-200 overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-zinc-200 bg-zinc-50/50 text-zinc-500 text-[11px] font-semibold uppercase tracking-wider">
+                  <th className="py-3 px-3">Book Title</th>
+                  <th className="py-3 px-3">Book Number</th>
+                  <th className="py-3 px-3">Borrower</th>
+                  <th className="py-3 px-3">Issue Date</th>
+                  <th className="py-3 px-3">Due Date</th>
+                  <th className="py-3 px-3 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {paginatedIssuedLoans.map((loan, idx) => {
+                  const dueDate = loan.dueDateFormatted || loan.dueDate || loan.due_date || '';
+                  const isOverdue = String(loan.status || '').toLowerCase() === 'overdue';
+                  return (
+                    <tr key={loan.id || loan._id || `${loan.patronId || loan.patron_id}-${loan.accession || idx}`} className="hover:bg-zinc-50/70">
+                      <td className="py-3 px-3">
+                        <div className="font-semibold text-zinc-900">{loan.bookTitle || loan.book_title || 'Unknown book'}</div>
+                        <div className="text-[11px] text-zinc-500">{loan.author || ''}</div>
+                      </td>
+                      <td className="py-3 px-3 font-mono text-zinc-700">
+                        {formatAccessionRange(loan.accession || loan.bookBarcode || loan.book_barcode)}
+                      </td>
+                      <td className="py-3 px-3">
+                        <div className="font-medium text-zinc-800">{loan.patronName || loan.patron_name || 'Unknown borrower'}</div>
+                        <div className="text-[11px] text-zinc-500">{loan.patronId || loan.patron_id || ''}</div>
+                      </td>
+                      <td className="py-3 px-3 text-zinc-600">{loan.issueDateFormatted || loan.issueDate || loan.issue_date || loan.issuedAt || '—'}</td>
+                      <td className="py-3 px-3 text-zinc-600">{dueDate || '—'}</td>
+                      <td className="py-3 px-3 text-center">
+                        <span className={`inline-flex px-2 py-1 rounded-full text-[10px] font-semibold ${
+                          isOverdue ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'
+                        }`}>
+                          {isOverdue ? 'Overdue' : 'Issued'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
       ) : (
         // ============================================================
         // 2. TOTAL BOOKS CATALOG TABLE (TAB 2)
@@ -503,7 +670,7 @@ export default function AllBooksView({
                   <th className="py-3 px-3">Accession Range</th>
                   <th className="py-3 px-3">Category</th>
                   <th className="py-3 px-3">Shelf & Rack</th>
-                  <th className="py-3 px-3 text-center">Copies In Stock</th>
+                  <th className="py-3 px-3 text-center">Available / Total Copies</th>
                   <th className="py-3 px-3">Serial Numbers</th>
                   <th className="py-3 px-3 text-right">Actions</th>
                 </tr>
@@ -566,7 +733,7 @@ export default function AllBooksView({
                             ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                             : 'bg-rose-50 text-rose-700 border-rose-200'
                         }`}>
-                          {availCount} / {copiesCount} Copies
+                          Available: {availCount} / Total: {copiesCount}
                         </span>
                         <span className="text-[10px] text-zinc-400 block mt-0.5">
                           {isAvailable ? `${percent}% on shelf` : 'All issued'}
@@ -657,7 +824,7 @@ export default function AllBooksView({
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : 'bg-rose-50 text-rose-700 border-rose-200'
                       }`}>
-                        {book.available}/{book.total} Available
+                        Available: {book.available ?? 0} / Total: {book.total ?? 1}
                       </span>
                     </div>
 
@@ -699,7 +866,7 @@ export default function AllBooksView({
           {/* Left: Item range count & dynamic rows per page selector */}
           <div className="flex items-center gap-4 flex-wrap">
             <span className="text-zinc-500 font-medium">
-              Showing <strong className="text-zinc-900 font-semibold">{startItem}</strong> to <strong className="text-zinc-900 font-semibold">{endItem}</strong> of <strong className="text-zinc-900 font-semibold">{currentItemsCount}</strong> {activeTab === 'available' ? 'Available Copies' : 'Books'}
+              Showing <strong className="text-zinc-900 font-semibold">{startItem}</strong> to <strong className="text-zinc-900 font-semibold">{endItem}</strong> of <strong className="text-zinc-900 font-semibold">{currentItemsCount}</strong> {activeTab === 'available' ? 'Available Copies' : activeTab === 'issued' ? 'Issued Books' : 'Books'}
             </span>
 
             <div className="flex items-center gap-1.5 text-zinc-500">
@@ -731,7 +898,7 @@ export default function AllBooksView({
             <button
               type="button"
               disabled={safePage <= 1}
-              onClick={() => setCurrentPage(1)}
+              onClick={() => handlePageChange(1)}
               className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
               title="First Section"
             >
@@ -741,7 +908,7 @@ export default function AllBooksView({
             <button
               type="button"
               disabled={safePage <= 1}
-              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              onClick={() => handlePageChange(Math.max(safePage - 1, 1))}
               className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
               title="Previous Section"
             >
@@ -767,7 +934,7 @@ export default function AllBooksView({
                     <button
                       key={item}
                       type="button"
-                      onClick={() => setCurrentPage(item)}
+                      onClick={() => handlePageChange(item)}
                       className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                         item === safePage
                           ? 'bg-blue-600 text-white'
@@ -783,7 +950,7 @@ export default function AllBooksView({
             <button
               type="button"
               disabled={safePage >= totalPages}
-              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              onClick={() => handlePageChange(Math.min(safePage + 1, totalPages))}
               className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
               title="Next Section"
             >
@@ -793,7 +960,7 @@ export default function AllBooksView({
             <button
               type="button"
               disabled={safePage >= totalPages}
-              onClick={() => setCurrentPage(totalPages)}
+              onClick={() => handlePageChange(totalPages)}
               className="p-1.5 border border-zinc-200 rounded-lg text-zinc-600 hover:bg-zinc-50 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
               title="Last Section"
             >

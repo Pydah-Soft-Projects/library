@@ -172,10 +172,12 @@ app.post('/api/roles/user-privilege', roleController.setUserPagePrivilegeOverrid
 app.get('/api/hrms/employees', hrmsController.getEmployees);
 app.get('/api/hrms/departments', hrmsController.getDepartments);
 app.get('/api/hrms/divisions', hrmsController.getDivisions);
+app.get('/api/hrms/employees/:empNo/photo', hrmsController.getEmployeePhoto);
 app.get('/api/hrms/employees/:empNo', hrmsController.getEmployeeByEmpNo);
 
 // 6d. SDMS Student Database Direct Integration (MySQL RDS)
 app.get('/api/sdms/students', sdmsController.getStudents);
+app.get('/api/sdms/students/:pin/photo', sdmsController.getStudentPhoto);
 app.get('/api/sdms/students/:pin', sdmsController.getStudentByPin);
 
 // 7. Security Audit Trails (AuditLogs in MongoDB)

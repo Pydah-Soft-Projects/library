@@ -98,19 +98,22 @@ async function searchStudents(query = '', limit = 20) {
           s.student_name LIKE ?
         ORDER BY 
           (CASE 
-            WHEN s.pin_no = ? THEN 1
-            WHEN s.pin_no LIKE ? THEN 2
+            WHEN LOWER(s.pin_no) = LOWER(?) OR LOWER(s.admission_number) = LOWER(?) OR LOWER(r.roll_number) = LOWER(?) OR LOWER(s.student_name) = LOWER(?) THEN 0
+            WHEN s.pin_no LIKE ? OR s.admission_number LIKE ? OR r.roll_number LIKE ? THEN 1
+            WHEN s.student_name LIKE ? THEN 2
             WHEN s.student_name LIKE ? THEN 3
-            WHEN s.student_name LIKE ? THEN 4
-            ELSE 5 
+            ELSE 4
           END),
+          s.student_name ASC,
           s.id DESC
         LIMIT ?
       `;
 
       params.push(
         patternStart, patternStart, patternStart, patternAny,
-        clean, patternStart, patternStart, patternWord,
+        clean, clean, clean, clean,
+        patternStart, patternStart, patternStart,
+        patternStart, patternWord,
         limitNum
       );
     } else {

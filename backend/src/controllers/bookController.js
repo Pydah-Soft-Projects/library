@@ -1,4 +1,5 @@
 const Book = require('../models/Book');
+const Loan = require('../models/Loan');
 const Category = require('../models/Category');
 const { logAudit } = require('../services/auditService');
 
@@ -61,10 +62,76 @@ async function getBooks(req, res) {
 
     const books = await bookQuery.lean();
 
-    const formattedBooks = books.map(b => ({
+    const activeLoans = books.length
+      ? await Loan.find({
+          book_id: { $in: books.map(book => book._id) },
+          status: { $ne: 'Returned' },
+          return_date: null
+        }).select('book_id accession book_barcode').lean()
+      : [];
+    const normalizeCopyCode = value => String(value || '').trim().toLowerCase().replace(/[\s\-_]/g, '');
+    const borrowedCopyIndexesByBook = new Map();
+    const borrowedLoanIdsByBook = new Map();
+    const copiesByBook = new Map(books.map(book => [book._id.toString(), book.copies_detail || []]));
+    activeLoans.forEach(loan => {
+      const bookId = loan.book_id?.toString();
+      if (!bookId) return;
+      const individualCodes = [loan.accession, loan.book_barcode]
+        .filter(code => code && !/^\s*\d+\s*[-–]\s*\d+\s*$/.test(String(code)))
+        .map(normalizeCopyCode)
+        .filter(Boolean);
+      if (individualCodes.length === 0) return;
+      const loanIds = borrowedLoanIdsByBook.get(bookId) || new Set();
+      loanIds.add(loan._id.toString());
+      borrowedLoanIdsByBook.set(bookId, loanIds);
+      const copies = copiesByBook.get(bookId) || [];
+      if (copies.length === 0) return;
+      const identifiersForCopy = copy => [copy.accession, copy.barcode, copy.serial_no].map(normalizeCopyCode);
+      const accessionCode = individualCodes[0];
+      const barcodeCode = individualCodes[1] || '';
+      let matchedCopyIndex = copies.findIndex(copy =>
+        normalizeCopyCode(copy.accession) === accessionCode
+      );
+      if (matchedCopyIndex < 0) {
+        matchedCopyIndex = copies.findIndex(copy => identifiersForCopy(copy).includes(accessionCode));
+      }
+      if (matchedCopyIndex < 0 && barcodeCode) {
+        matchedCopyIndex = copies.findIndex(copy => identifiersForCopy(copy).includes(barcodeCode));
+      }
+      if (matchedCopyIndex < 0) return;
+      const borrowedIndexes = borrowedCopyIndexesByBook.get(bookId) || new Set();
+      borrowedIndexes.add(matchedCopyIndex);
+      borrowedCopyIndexesByBook.set(bookId, borrowedIndexes);
+    });
+
+    const formattedBooks = books.map(b => {
+      const total = Number(b.total || b.copies_detail?.length || 1);
+      const borrowedIndexes = borrowedCopyIndexesByBook.get(b._id.toString()) || new Set();
+      const hasCopyRecords = Array.isArray(b.copies_detail) && b.copies_detail.length > 0;
+      const copiesDetail = hasCopyRecords
+        ? b.copies_detail.map((copy, index) => {
+            const isBorrowed = borrowedIndexes.has(index);
+            return {
+              ...copy,
+              status: isBorrowed
+                ? 'Borrowed'
+                : ['Lost', 'Damaged'].includes(String(copy.status || '').trim())
+                ? copy.status
+                : 'Available'
+            };
+          })
+        : b.copies_detail || [];
+      const matchedBorrowedCount = hasCopyRecords
+        ? borrowedIndexes.size
+        : (borrowedLoanIdsByBook.get(b._id.toString()) || new Set()).size;
+      const available = Math.max(0, total - matchedBorrowedCount);
+
+      return {
       id: b._id.toString(),
       _id: b._id.toString(),
       title: b.title,
+      title_id: b.title_id || b.titleId || '',
+      titleId: b.title_id || b.titleId || '',
       author: b.author,
       isbn: b.isbn,
       category: b.category,
@@ -73,11 +140,12 @@ async function getBooks(req, res) {
       barcode: b.barcode,
       shelf: b.shelf,
       total: b.total,
-      available: b.available !== undefined && b.available !== null ? Number(b.available) : (b.copies_detail?.length || b.total || 1),
+      available,
       publisher: b.publisher,
       edition: b.edition,
-      copies_detail: b.copies_detail || []
-    }));
+      copies_detail: copiesDetail
+      };
+    });
 
     res.json({
       total: totalMatching,
@@ -167,6 +235,8 @@ async function createBook(req, res) {
       title, 
       author, 
       isbn, 
+      title_id,
+      titleId,
       category, 
       category_code, 
       accession, 
@@ -213,6 +283,7 @@ async function createBook(req, res) {
       title: title.trim(),
       author: author.trim(),
       isbn: isbn ? isbn.trim() : '',
+      title_id: String(title_id || titleId || '').trim(),
       category: category || 'General',
       category_code: catCode,
       accession: finalAccession,
@@ -315,6 +386,7 @@ async function bulkCreateBooks(req, res) {
           title,
           author,
           isbn: (item.isbn || item['ClassificationNumber'] || '').trim(),
+          title_id: String(item.title_id || item.titleId || '').trim(),
           category,
           category_code: catCode,
           accession: baseAcc,
@@ -331,6 +403,8 @@ async function bulkCreateBooks(req, res) {
           id: newBook._id.toString(),
           _id: newBook._id.toString(),
           title: newBook.title,
+          title_id: newBook.title_id,
+          titleId: newBook.title_id,
           author: newBook.author,
           isbn: newBook.isbn,
           category: newBook.category,

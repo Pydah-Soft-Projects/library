@@ -1,24 +1,76 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useDeferredValue } from 'react';
 import { 
-  ArrowLeftRight, User, Calendar, Clock, AlertTriangle, 
+  ArrowLeftRight, Calendar, Clock, AlertTriangle,
   CheckCircle2, Search, Printer, Check, X, RefreshCw, 
   BookOpen, Layers, ShieldCheck, Database, Sparkles, ChevronRight, UserCheck,
   FileSpreadsheet, UploadCloud, Download, AlertCircle, ListFilter
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
+const isActiveLoan = loan =>
+  Boolean(loan) &&
+  String(loan.status || '').trim().toLowerCase() !== 'returned' &&
+  !(loan.return_date || loan.returnDate || loan.returned_at || loan.returnedAt || loan.returned_date);
 
-// Helper to render live SDMS student photo directly without portal storage (with enlarged passport portrait support)
-function StudentSdmsPhoto({ student, size = 'md', className = '' }) {
+const normalizePatronId = (value, patronType) => {
+  const id = String(value ?? '').trim().toLowerCase();
+  return patronType === 'faculty' && /^\d+$/.test(id) ? id.replace(/^0+(?=\d)/, '') : id;
+};
+
+const getPatronType = patron => {
+  const type = String(patron?.patronType || patron?.patron_type || patron?.memberType || '').trim().toLowerCase();
+  if (type === 'faculty' || type === 'student') return type;
+  const patronId = String(patron?.patronId || patron?.patron_id || patron?.emp_no || patron?.pin_no || '').trim();
+  return /^\d+$/.test(patronId) ? 'faculty' : 'student';
+};
+
+const rankPatronResults = (results, query, patronType) => {
+  const search = String(query || '').trim().toLowerCase();
+  if (!search) return results;
+  const normalizedSearch = normalizePatronId(search, patronType);
+  const getRank = patron => {
+    const name = String(patron.name || patron.employee_name || patron.student_name || '').trim().toLowerCase();
+    const id = normalizePatronId(
+      patronType === 'faculty'
+        ? patron.emp_no
+        : patron.pin_no || patron.rollNo || patron.roll_number || patron.admission_number,
+      patronType
+    );
+    if (name === search || id === normalizedSearch) return 0;
+    if (id.startsWith(normalizedSearch)) return 1;
+    if (name.startsWith(search)) return 2;
+    if (name.split(/\s+/).some(part => part.startsWith(search))) return 3;
+    if (name.includes(search) || id.includes(normalizedSearch)) return 4;
+    return 5;
+  };
+  return results
+    .map((result, index) => ({ result, index, rank: getRank(result) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(item => item.result);
+};
+
+// Images are loaded from their source directory so search responses stay lightweight.
+function PatronPhoto({ student, size = 'md', className = '' }) {
   const [hasError, setHasError] = useState(false);
-  const photoUrl = student?.photo || student?.student_photo || student?.image || student?.photo_url || student?.image_url;
+  const isFaculty = student?.patronType === 'faculty' || student?.memberType === 'faculty';
+  const patronId = student?.emp_no || student?.patronId || student?.pin_no || student?.rollNo;
+  const directoryPhotoUrl = isFaculty
+    ? (student?.has_photo && patronId ? `/api/hrms/employees/${encodeURIComponent(patronId)}/photo` : null)
+    : (student?.has_photo && patronId ? `/api/sdms/students/${encodeURIComponent(patronId)}/photo` : null);
+  const rawPhoto = student?.photo || student?.student_photo || student?.employee_photo ||
+    student?.employee_image || student?.profile_photo || student?.profile_image ||
+    student?.image || student?.photo_url || student?.image_url || student?.avatar;
+  const photoUrl = rawPhoto || directoryPhotoUrl;
+  const resolvedPhotoUrl = typeof photoUrl === 'string' && photoUrl && !/^(data:|https?:\/\/|\/)/i.test(photoUrl)
+    ? `data:image/jpeg;base64,${photoUrl}`
+    : photoUrl;
   const initial = student?.name 
     ? student.name.charAt(0).toUpperCase() 
-    : (student?.student_name ? student.student_name.charAt(0).toUpperCase() : 'S');
+    : (student?.student_name ? student.student_name.charAt(0).toUpperCase() : 'U');
 
   useEffect(() => {
     setHasError(false);
-  }, [student?.pin_no, student?.rollNo, photoUrl]);
+  }, [patronId, photoUrl]);
 
   let defaultDim = 'w-12 h-12 rounded-xl text-base';
   if (size === 'sm') {
@@ -33,11 +85,11 @@ function StudentSdmsPhoto({ student, size = 'md', className = '' }) {
 
   const dim = className || defaultDim;
 
-  if (photoUrl && !hasError) {
+  if (resolvedPhotoUrl && !hasError) {
     return (
       <img
-        src={photoUrl}
-        alt={student?.name || 'Student'}
+        src={resolvedPhotoUrl}
+        alt={student?.name || student?.employee_name || 'Patron'}
         onError={() => setHasError(true)}
         className={`${dim} object-cover border-2 border-blue-300/90 shrink-0 shadow-md bg-blue-50  transition-transform`}
       />
@@ -60,6 +112,7 @@ export default function BookIssuesReturnsView({
   onBulkImportCirculations,
   onIssueBook,
   onReturnBook,
+  onManualReturnBook,
   onRenewLoan,
   onCollectCash,
   onOpenUpiModal,
@@ -101,28 +154,73 @@ export default function BookIssuesReturnsView({
     return str;
   };
 
+  const normalizeCatalogCode = value => String(value ?? '').replace(/[\s\-_]/g, '').toLowerCase();
+  const getCatalogShelfForLoan = loan => {
+    const identifiers = [loan.accession, loan.bookBarcode, loan.bookTitleId]
+      .map(normalizeCatalogCode)
+      .filter(Boolean);
+    if (identifiers.length === 0) return '';
+
+    const catalogBook = books.find(book => {
+      const bookIdentifiers = [book.accession, book.barcode, book.titleId, book.title_id]
+        .map(normalizeCatalogCode);
+      const copyIdentifiers = Array.isArray(book.copies_detail)
+        ? book.copies_detail.flatMap(copy => [copy.accession, copy.barcode, copy.serial_no]).map(normalizeCatalogCode)
+        : [];
+      return [...bookIdentifiers, ...copyIdentifiers].some(code => identifiers.includes(code));
+    });
+    return catalogBook
+      ? catalogBook.shelf || catalogBook.shelf_location || 'Central Stack'
+      : '';
+  };
+
   // Inspection Popup Modal for Clicked Circulation Rows
   const [inspectingLoan, setInspectingLoan] = useState(null);
   const [inspectingStudent, setInspectingStudent] = useState(null);
   const [isFetchingInspectingStudent, setIsFetchingInspectingStudent] = useState(false);
+  const inspectSearchAbortRef = useRef(null);
+  useEffect(() => () => inspectSearchAbortRef.current?.abort(), []);
 
   const handleInspectLoan = (loan) => {
     if (!loan) return;
+    inspectSearchAbortRef.current?.abort();
     setInspectingLoan(loan);
     setInspectingStudent(null);
 
-    const pinToFetch = loan.patronId || loan.patron_id;
-    if (pinToFetch) {
+    const patronId = loan.patronId || loan.patron_id;
+    if (patronId) {
+      const isFaculty = loan.patronType === 'faculty';
+      const controller = new AbortController();
+      inspectSearchAbortRef.current = controller;
       setIsFetchingInspectingStudent(true);
-      fetch(`/api/sdms/students/${encodeURIComponent(pinToFetch)}`)
+      fetch(isFaculty
+        ? `/api/hrms/employees/${encodeURIComponent(patronId)}`
+        : `/api/sdms/students/${encodeURIComponent(patronId)}`,
+      { signal: controller.signal })
         .then(res => res.json())
         .then(data => {
-          if (data && data.student) {
-            setInspectingStudent(data.student);
+          const patron = isFaculty ? data.employee : data.student;
+          if (patron && !controller.signal.aborted) {
+            setInspectingStudent({
+              ...patron,
+              patronType: isFaculty ? 'faculty' : 'student'
+            });
           }
         })
-        .catch(() => {})
-        .finally(() => setIsFetchingInspectingStudent(false));
+        .catch(err => {
+          if (err.name !== 'AbortError') console.error('Borrower profile lookup failed:', err);
+        })
+        .finally(() => {
+          if (inspectSearchAbortRef.current === controller) setIsFetchingInspectingStudent(false);
+        });
+    } else {
+      setInspectingStudent({
+        name: loan.patronName,
+        emp_no: patronId,
+        patronType: loan.patronType || 'student',
+        has_photo: loan.patronType === 'faculty'
+      });
+      setIsFetchingInspectingStudent(false);
     }
   };
 
@@ -174,94 +272,112 @@ export default function BookIssuesReturnsView({
   };
 
   // ==================== ISSUE DESK STATE ====================
-  const availableBooks = books.filter(b => getBookAvailableCount(b) > 0);
+  const availableBooks = useMemo(
+    () => books.filter(b => getBookAvailableCount(b) > 0),
+    [books]
+  );
   
   // Selected Books to Issue (Multiple Books Supported)
   const [selectedBooks, setSelectedBooks] = useState(() => {
-    return prefilledBook ? [prefilledBook] : [];
+    return prefilledBook?.selectedCopy ? [prefilledBook] : [];
   });
-
-  useEffect(() => {
-    if (prefilledBook) {
-      setSelectedBooks([prefilledBook]);
-      setActiveForm('issue');
-    }
-  }, [prefilledBook]);
 
   // ==================== BOOK NUMBER & TITLE SEARCH FOR ISSUE DESK ====================
   const [bookSearchInput, setBookSearchInput] = useState('');
+  const deferredBookSearchInput = useDeferredValue(bookSearchInput);
   const [isBookDropdownOpen, setIsBookDropdownOpen] = useState(false);
   const bookDropdownRef = useRef(null);
 
-  // Filter available books based on search input (by book number, serial, accession, title, author, shelf, titleId)
+  useEffect(() => {
+    if (!prefilledBook) return;
+    if (prefilledBook.selectedCopy) {
+      setSelectedBooks([prefilledBook]);
+      setBookSearchInput('');
+    } else {
+      setSelectedBooks([]);
+      setBookSearchInput(String(prefilledBook.accession || prefilledBook.barcode || ''));
+      setIsBookDropdownOpen(true);
+    }
+    setActiveForm('issue');
+  }, [prefilledBook]);
+
   const filteredAvailableBooks = useMemo(() => {
-    if (!bookSearchInput.trim()) return availableBooks;
-    const rawQ = bookSearchInput.trim().toLowerCase();
-    const cleanNum = rawQ.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
-    const isNumeric = /^\d+$/.test(cleanNum);
+    const query = deferredBookSearchInput.trim().toLowerCase().replace(/^#/, '').replace(/[\s\-_]/g, '');
+    if (!query) return [];
 
-    return availableBooks.filter(b => {
-      // 1. Text match (title, author, shelf, category, titleId)
-      if (b.title && b.title.toLowerCase().includes(rawQ)) return true;
-      if (b.author && b.author.toLowerCase().includes(rawQ)) return true;
-      if (b.shelf && b.shelf.toLowerCase().includes(rawQ)) return true;
-      if (b.category && b.category.toLowerCase().includes(rawQ)) return true;
-      if (b.titleId && String(b.titleId).toLowerCase().includes(rawQ)) return true;
-      if (b.title_id && String(b.title_id).toLowerCase().includes(rawQ)) return true;
+    const normalize = value => String(value || '').trim().toLowerCase().replace(/[\s\-_]/g, '');
+    const results = [];
 
-      // 2. Direct string match on accession, barcode, titleId
-      const accStr = String(b.accession || '').toLowerCase();
-      const barcodeStr = String(b.barcode || '').toLowerCase();
-      const titleIdStr = String(b.titleId || b.title_id || '').toLowerCase();
-      if (accStr.includes(rawQ) || barcodeStr.includes(rawQ) || (titleIdStr && titleIdStr.includes(rawQ))) return true;
+    availableBooks.forEach(book => {
+      const availableCount = getBookAvailableCount(book);
+      const totalCount = getBookTotalCount(book);
+      let copies = Array.isArray(book.copies_detail) ? book.copies_detail.slice(0, totalCount) : [];
 
-      // 3. Numeric matching for Book Number / Accession / Serials / TitleId
-      if (cleanNum) {
-        if (titleIdStr && titleIdStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
-        if (accStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
-        if (barcodeStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
-        if (titleIdStr.replace(/[\s\-_]/g, '').includes(cleanNum)) return true;
-
-        // Check if numeric query falls within accession range (e.g. "19407 - 19421" or "21 - 25")
-        if (isNumeric) {
-          const num = parseInt(cleanNum, 10);
-          const rangeMatch = accStr.match(/(\d+)\s*[-–]\s*(\d+)/);
-          if (rangeMatch) {
-            const start = parseInt(rangeMatch[1], 10);
-            const end = parseInt(rangeMatch[2], 10);
-            if (!isNaN(num) && num >= start && num <= end) return true;
-          }
-        }
-
-        // Check individual copy serials & accessions in copies_detail
-        if (Array.isArray(b.copies_detail) && b.copies_detail.length > 0) {
-          const matchedCopy = b.copies_detail.some(c => {
-            const cpAcc = String(c.accession || '').toLowerCase();
-            const cpSer = String(c.serial_no || '').toLowerCase();
-            const cpBar = String(c.barcode || '').toLowerCase();
-            const cpNum = String(c.copy_number || '');
-            return (
-              cpAcc.includes(cleanNum) ||
-              cpSer.includes(cleanNum) ||
-              cpBar.includes(cleanNum) ||
-              cpNum === cleanNum
-            );
-          });
-          if (matchedCopy) return true;
+      if (copies.length === 0) {
+        const range = String(book.accession || '').match(/^\s*(\d+)\s*[-–]\s*(\d+)\s*$/);
+        const firstNumber = range ? Number(range[1]) : Number(book.accession);
+        const lastNumber = range ? Number(range[2]) : firstNumber + totalCount - 1;
+        if (Number.isFinite(firstNumber) && lastNumber >= firstNumber && lastNumber - firstNumber < 10000) {
+          copies = Array.from({ length: Math.min(totalCount, lastNumber - firstNumber + 1) }, (_, index) => ({
+            copy_number: index + 1,
+            accession: String(firstNumber + index),
+            barcode: '',
+            serial_no: '',
+            status: index < availableCount ? 'Available' : 'Issued'
+          }));
+        } else if (totalCount === 1 && book.accession) {
+          copies = [{ accession: String(book.accession), barcode: book.barcode || '', status: 'Available' }];
         }
       }
 
-      return false;
+      let availableSeen = 0;
+      copies.forEach((copy, index) => {
+        const isAvailable = !copy.status || String(copy.status).toLowerCase() === 'available';
+        if (!isAvailable || availableSeen >= availableCount) return;
+        availableSeen += 1;
+
+        const number = String(copy.accession || copy.copy_number || '');
+        const identifiers = [number, copy.barcode, copy.serial_no]
+          .map(normalize)
+          .filter(Boolean);
+        const rank = identifiers.reduce((best, identifier) => {
+          if (identifier === query) return Math.min(best, 0);
+          if (identifier.startsWith(query)) return Math.min(best, 1);
+          if (identifier.includes(query)) return Math.min(best, 2);
+          return best;
+        }, Number.POSITIVE_INFINITY);
+        if (!Number.isFinite(rank)) return;
+
+        const selectedCopy = {
+          ...copy,
+          copy_number: copy.copy_number || index + 1,
+          accession: copy.accession || number,
+          barcode: copy.barcode || copy.accession || number
+        };
+        results.push({
+          ...book,
+          accession: selectedCopy.accession,
+          barcode: selectedCopy.barcode,
+          selectedCopy,
+          matchRank: rank
+        });
+      });
     });
-  }, [availableBooks, bookSearchInput]);
+
+    return results.sort((a, b) =>
+      a.matchRank - b.matchRank ||
+      String(a.selectedCopy.accession).localeCompare(String(b.selectedCopy.accession), undefined, { numeric: true })
+    );
+  }, [availableBooks, deferredBookSearchInput]);
 
   const handleAddBookToIssue = (book) => {
     if (!book) return;
-    const avail = getBookAvailableCount(book);
-    const alreadySelectedCount = selectedBooks.filter(b => (b.id && b.id === book.id) || (b.barcode && b.barcode === book.barcode) || (b.accession && b.accession === book.accession)).length;
-
-    if (alreadySelectedCount >= avail) {
-      if (onToast) onToast(`All ${avail} available copies of "${book.title}" are already in the issue list.`, 'warning');
+    const copyNumber = String(book.selectedCopy?.accession || book.accession || '');
+    const alreadySelected = selectedBooks.some(selected =>
+      String(selected.selectedCopy?.accession || selected.accession || '') === copyNumber
+    );
+    if (!copyNumber || alreadySelected) {
+      if (onToast) onToast('Select a unique, available book number to issue.', 'warning');
       return;
     }
 
@@ -270,7 +386,7 @@ export default function BookIssuesReturnsView({
       return;
     }
 
-    setSelectedBooks(prev => [...prev, book]);
+    setSelectedBooks(prev => [...prev, { ...book, accession: copyNumber, selectedCopy: book.selectedCopy }]);
     setBookSearchInput('');
     setIsBookDropdownOpen(false);
   };
@@ -279,15 +395,25 @@ export default function BookIssuesReturnsView({
     setSelectedBooks(prev => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
-  // ==================== SDMS STUDENT SEARCH FOR ISSUE DESK ====================
-  const [studentSearchInput, setStudentSearchInput] = useState('');
-  const [sdmsResults, setSdmsResults] = useState([]);
-  const [isSearchingSdms, setIsSearchingSdms] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState(null);
+  // ==================== SDMS / HRMS PATRON SEARCH FOR ISSUE DESK ====================
+  const [memberType, setMemberType] = useState('student');
+  const [patronSearchInput, setPatronSearchInput] = useState('');
+  const [directoryResults, setDirectoryResults] = useState([]);
+  const [isSearchingDirectory, setIsSearchingDirectory] = useState(false);
+  const [directorySearchError, setDirectorySearchError] = useState('');
+  const [selectedPatron, setSelectedPatron] = useState(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const issueSearchDebounceRef = useRef(null);
   const issueSearchAbortRef = useRef(null);
   const issueDropdownRef = useRef(null);
+  const rankedDirectoryResults = useMemo(
+    () => rankPatronResults(directoryResults, patronSearchInput, memberType),
+    [directoryResults, patronSearchInput, memberType]
+  );
+  useEffect(() => () => {
+    clearTimeout(issueSearchDebounceRef.current);
+    issueSearchAbortRef.current?.abort();
+  }, []);
 
   // Borrowing Window: Defaults to Settings page "default_loan_days"
   const [durationPreset, setDurationPreset] = useState(defaultLoanDays);
@@ -300,31 +426,35 @@ export default function BookIssuesReturnsView({
 
   // Dynamic duration presets following Settings page
   const durationPresets = Array.from(new Set([7, 14, 21, defaultLoanDays])).sort((a, b) => a - b);
+  const formatDateInput = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const todayDate = formatDateInput(new Date());
 
   const [manualDate, setManualDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + defaultLoanDays);
-    return d.toISOString().split('T')[0];
+    return formatDateInput(d);
   });
   const [issuedSlip, setIssuedSlip] = useState(null);
 
-  // Live SDMS Database Student Lookup on Keystroke (Issue Desk) - Optimized with AbortController
-  const handleIssueStudentSearchChange = (val) => {
-    setStudentSearchInput(val);
-    setSelectedStudent(null);
+  // Live directory lookup for the selected patron type.
+  const handleIssuePatronSearchChange = (val) => {
+    setPatronSearchInput(val);
+    setSelectedPatron(null);
+    setDirectorySearchError('');
 
     const query = val.trim();
+    if (issueSearchAbortRef.current) issueSearchAbortRef.current.abort();
     if (!query || query.length < 2) {
-      if (issueSearchAbortRef.current) issueSearchAbortRef.current.abort();
       clearTimeout(issueSearchDebounceRef.current);
-      setSdmsResults([]);
-      setIsSearchingSdms(false);
+      setDirectoryResults([]);
+      setIsSearchingDirectory(false);
       setIsDropdownOpen(false);
       return;
     }
 
+    setDirectoryResults([]);
     clearTimeout(issueSearchDebounceRef.current);
-    setIsSearchingSdms(true);
+    setIsSearchingDirectory(true);
     setIsDropdownOpen(true);
 
     issueSearchDebounceRef.current = setTimeout(async () => {
@@ -335,83 +465,72 @@ export default function BookIssuesReturnsView({
       issueSearchAbortRef.current = controller;
 
       try {
-        const res = await fetch(`/api/sdms/students?search=${encodeURIComponent(query)}&limit=10`, {
+        const isFaculty = memberType === 'faculty';
+        const endpoint = isFaculty ? '/api/hrms/employees' : '/api/sdms/students';
+        const params = new URLSearchParams({ search: query, limit: '10' });
+        if (isFaculty) {
+          params.set('status', 'active');
+          params.set('directory', 'true');
+        }
+        const res = await fetch(`${endpoint}?${params}`, {
           signal: controller.signal
         });
         if (!res.ok) {
-          throw new Error(`SDMS status ${res.status}`);
+          throw new Error(`${isFaculty ? 'HRMS' : 'SDMS'} status ${res.status}`);
         }
         const data = await res.json();
-        if (Array.isArray(data.students)) {
-          setSdmsResults(data.students);
-          setIsDropdownOpen(true);
-        } else {
-          setSdmsResults([]);
-        }
+        if (controller.signal.aborted) return;
+        const results = isFaculty ? data.employees : data.students;
+        setDirectoryResults(Array.isArray(results) ? results : []);
+        setIsDropdownOpen(Array.isArray(results) && results.length > 0);
       } catch (err) {
         if (err.name === 'AbortError') return;
-        console.warn('SDMS search fallback to local students:', err.message);
-        const clean = query.toLowerCase();
-        const localMatches = students.filter(s => 
-          (s.name && s.name.toLowerCase().includes(clean)) ||
-          (s.rollNo && s.rollNo.toLowerCase().includes(clean)) ||
-          (s.pin_no && s.pin_no.toLowerCase().includes(clean)) ||
-          (s.id && String(s.id).toLowerCase() === clean)
-        );
-        setSdmsResults(localMatches);
-        setIsDropdownOpen(localMatches.length > 0);
+        console.error(`${memberType === 'faculty' ? 'HRMS' : 'SDMS'} patron search failed:`, err);
+        setDirectoryResults([]);
+        setDirectorySearchError(`Could not search ${memberType === 'faculty' ? 'HRMS' : 'SDMS'}. Please try again.`);
+        setIsDropdownOpen(false);
       } finally {
         if (issueSearchAbortRef.current === controller) {
-          setIsSearchingSdms(false);
+          setIsSearchingDirectory(false);
         }
       }
     }, 250);
   };
 
-  const handleSelectStudent = (st) => {
-    setSelectedStudent(st);
-    setStudentSearchInput(`${st.name} (${st.pin_no || st.rollNo})`);
+  const handleSelectPatron = (patron) => {
+    setSelectedPatron(patron);
+    const patronId = memberType === 'faculty'
+      ? patron.emp_no
+      : (patron.pin_no || patron.rollNo);
+    setPatronSearchInput(`${patron.name || patron.employee_name} (${patronId})`);
     setIsDropdownOpen(false);
-    // Fetch full profile from SDMS if photo is not loaded yet
-    if (!st.photo && !st.student_photo && (st.pin_no || st.rollNo)) {
-      fetch(`/api/sdms/students/${encodeURIComponent(st.pin_no || st.rollNo)}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.student) {
-            setSelectedStudent(data.student);
-          }
-        })
-        .catch(() => {});
-    }
   };
 
-  const handleClearSelectedStudent = () => {
-    setSelectedStudent(null);
-    setStudentSearchInput('');
-    setSdmsResults([]);
+  const handleClearSelectedPatron = () => {
+    setSelectedPatron(null);
+    setPatronSearchInput('');
+    setDirectoryResults([]);
+    setDirectorySearchError('');
+    setIsDropdownOpen(false);
   };
 
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (issueDropdownRef.current && !issueDropdownRef.current.contains(e.target)) {
-        setIsDropdownOpen(false);
-      }
-      if (bookDropdownRef.current && !bookDropdownRef.current.contains(e.target)) {
-        setIsBookDropdownOpen(false);
-      }
-      if (returnDropdownRef.current && !returnDropdownRef.current.contains(e.target)) {
-        setIsReturnDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const handleMemberTypeChange = (type) => {
+    if (type === memberType) return;
+    if (issueSearchAbortRef.current) issueSearchAbortRef.current.abort();
+    clearTimeout(issueSearchDebounceRef.current);
+    setMemberType(type);
+    setPatronSearchInput('');
+    setSelectedPatron(null);
+    setDirectoryResults([]);
+    setDirectorySearchError('');
+    setIsSearchingDirectory(false);
+    setIsDropdownOpen(false);
+  };
 
   // Compute calculated due date
   const calculatedDueDate = (() => {
     if (durationPreset === 'manual') {
-      return manualDate ? new Date(manualDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Select Date';
+      return manualDate ? new Date(`${manualDate}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Select Date';
     }
     const d = new Date();
     d.setDate(d.getDate() + Number(durationPreset || defaultLoanDays));
@@ -427,27 +546,33 @@ export default function BookIssuesReturnsView({
       return;
     }
 
-    if (!selectedStudent) {
-      if (onToast) onToast('Please search and select a verified student from SDMS', 'error');
+    if (!selectedPatron) {
+      if (onToast) onToast(`Please search and select a verified ${memberType} from ${memberType === 'faculty' ? 'HRMS' : 'SDMS'}`, 'error');
       return;
     }
 
-    if (selectedStudent.status === 'Frozen') {
+    if (memberType === 'student' && selectedPatron.status === 'Frozen') {
       if (onToast) onToast('Borrowing locked: This student account is frozen due to overdue fines.', 'error');
       return;
     }
 
-    // Follow Settings Guidelines: Max Books Quota Check
-    const studentActiveLoans = activeLoans.filter(l => 
-      (l.patronId && (
-        l.patronId.toLowerCase() === String(selectedStudent.pin_no || '').toLowerCase() || 
-        l.patronId.toLowerCase() === String(selectedStudent.rollNo || '').toLowerCase()
-      )) ||
-      (l.patronName && l.patronName.toLowerCase() === selectedStudent.name.toLowerCase())
+    const patronId = memberType === 'faculty'
+      ? selectedPatron.emp_no
+      : (selectedPatron.pin_no || selectedPatron.rollNo);
+    const patronName = selectedPatron.name || selectedPatron.employee_name;
+    const patronActiveLoans = activeLoans.filter(l =>
+      (l.patronType || 'student') === memberType &&
+      ((l.patronId && l.patronId.toLowerCase() === String(patronId || '').toLowerCase()) ||
+        (l.patronName && l.patronName.toLowerCase() === String(patronName || '').toLowerCase()))
     );
 
-    if (studentActiveLoans.length + selectedBooks.length > maxBooksQuota) {
-      if (onToast) onToast(`Borrowing quota reached: ${selectedStudent.name} already has ${studentActiveLoans.length} active loans and cannot borrow ${selectedBooks.length} more books (Institutional limit: ${maxBooksQuota} books per student).`, 'error');
+    if (patronActiveLoans.length + selectedBooks.length > maxBooksQuota) {
+      if (onToast) onToast(`Borrowing quota reached: ${patronName} already has ${patronActiveLoans.length} active loans and cannot borrow ${selectedBooks.length} more books (Institutional limit: ${maxBooksQuota} books per patron).`, 'error');
+      return;
+    }
+
+    if (durationPreset === 'manual' && (!manualDate || manualDate < todayDate)) {
+      if (onToast) onToast('Please select a valid end date that is today or later.', 'error');
       return;
     }
 
@@ -456,9 +581,10 @@ export default function BookIssuesReturnsView({
       bookBarcode: selectedBooks[0].barcode || selectedBooks[0].accession,
       bookTitle: selectedBooks[0].title,
       accession: selectedBooks[0].accession,
-      patronId: selectedStudent.pin_no || selectedStudent.rollNo,
-      patronName: selectedStudent.name,
-      department: selectedStudent.department || 'General',
+      patronId,
+      patronName,
+      patronType: memberType,
+      department: selectedPatron.department || 'General',
       durationDays: durationPreset === 'manual' ? null : durationPreset,
       manualDueDate: durationPreset === 'manual' ? manualDate : null
     };
@@ -466,7 +592,8 @@ export default function BookIssuesReturnsView({
     setIsSubmittingIssue(true);
     try {
       if (onIssueBook) {
-        await onIssueBook(payload);
+        const result = await onIssueBook(payload);
+        if (!result) return;
       }
 
       // Set printable confirmation receipt
@@ -489,16 +616,95 @@ export default function BookIssuesReturnsView({
   const [returnInput, setReturnInput] = useState('');
   const [isSearchingReturnSdms, setIsSearchingReturnSdms] = useState(false);
   const [returnSdmsResults, setReturnSdmsResults] = useState([]);
+  const [returnMemberType, setReturnMemberType] = useState('student');
+  const [returnSearchError, setReturnSearchError] = useState('');
   const [isReturnDropdownOpen, setIsReturnDropdownOpen] = useState(false);
   const [selectedReturnStudent, setSelectedReturnStudent] = useState(null);
   const [selectedLoanForReturn, setSelectedLoanForReturn] = useState(null);
+  const [manualReturnBook, setManualReturnBook] = useState(null);
+  const [manualReturnIssueDate, setManualReturnIssueDate] = useState('');
+  const [manualReturnDueDate, setManualReturnDueDate] = useState('');
+  const [isSubmittingManualReturn, setIsSubmittingManualReturn] = useState(false);
   const returnSearchDebounceRef = useRef(null);
+  const returnSearchAbortRef = useRef(null);
   const returnDropdownRef = useRef(null);
+  const rankedReturnResults = useMemo(
+    () => rankPatronResults(returnSdmsResults, returnInput, returnMemberType),
+    [returnSdmsResults, returnInput, returnMemberType]
+  );
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (issueDropdownRef.current && !issueDropdownRef.current.contains(e.target)) {
+        setIsDropdownOpen(false);
+      }
+      if (bookDropdownRef.current && !bookDropdownRef.current.contains(e.target)) {
+        setIsBookDropdownOpen(false);
+      }
+      if (returnDropdownRef.current && !returnDropdownRef.current.contains(e.target)) {
+        setIsReturnDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+  useEffect(() => () => {
+    clearTimeout(returnSearchDebounceRef.current);
+    returnSearchAbortRef.current?.abort();
+  }, []);
 
-  // Live SDMS / Barcode search on keystroke
+  const handleReturnMemberTypeChange = (type) => {
+    if (type === returnMemberType) return;
+    clearTimeout(returnSearchDebounceRef.current);
+    returnSearchAbortRef.current?.abort();
+    setReturnMemberType(type);
+    setReturnInput('');
+    setReturnSdmsResults([]);
+    setSelectedReturnStudent(null);
+    setSelectedLoanForReturn(null);
+    setReturnSearchError('');
+    setIsSearchingReturnSdms(false);
+    setIsReturnDropdownOpen(false);
+  };
+
+  const findCatalogReturnBook = scannedCode => {
+    const normalizeCode = value => String(value ?? '').replace(/[\s\-_]/g, '').toLowerCase();
+    const scannedCodeNormalized = normalizeCode(scannedCode);
+    for (const book of books) {
+      const identifiers = [
+        { value: book.barcode, copy: null },
+        { value: book.accession, copy: null },
+        { value: book.titleId, copy: null },
+        { value: book.title_id, copy: null },
+        ...(Array.isArray(book.copies_detail)
+          ? book.copies_detail.flatMap(copy => [
+              { value: copy.barcode, copy },
+              { value: copy.accession, copy },
+              { value: copy.serial_no, copy }
+            ])
+          : [])
+      ];
+      const match = identifiers.find(identifier =>
+        scannedCodeNormalized && normalizeCode(identifier.value) === scannedCodeNormalized
+      );
+      if (match) {
+        return {
+          book,
+          scannedCode: String(scannedCode).trim(),
+          copyBarcode: match.copy?.barcode || match.copy?.accession || match.copy?.serial_no || scannedCode,
+          accession: match.copy?.accession || book.accession || scannedCode
+        };
+      }
+    }
+    return null;
+  };
+
+  // Match scanned books locally, then search the selected patron directory.
   const handleScanOrSearchReturn = (val) => {
     setReturnInput(val);
     const clean = val.trim();
+    clearTimeout(returnSearchDebounceRef.current);
+    returnSearchAbortRef.current?.abort();
+    setReturnSearchError('');
 
     if (!clean) {
       setReturnSdmsResults([]);
@@ -525,94 +731,129 @@ export default function BookIssuesReturnsView({
       return false;
     });
     if (matchedLoan) {
-      setSelectedLoanForReturn(matchedLoan);
-      setSelectedReturnStudent({
-        name: matchedLoan.patronName,
-        pin_no: matchedLoan.patronId,
-        department: matchedLoan.department
-      });
+      setManualReturnBook(null);
+      handleSelectLoanToReturn(matchedLoan);
       setIsReturnDropdownOpen(false);
       return;
     }
 
-    // 2. Otherwise search live SDMS student database
-    clearTimeout(returnSearchDebounceRef.current);
+    const catalogMatch = findCatalogReturnBook(clean);
+    if (catalogMatch) {
+      setManualReturnBook(catalogMatch);
+      setSelectedLoanForReturn(null);
+      setReturnSdmsResults([]);
+      setIsSearchingReturnSdms(false);
+      setIsReturnDropdownOpen(false);
+      return;
+    }
+
+    if (clean.length < 2) {
+      setReturnSdmsResults([]);
+      setIsSearchingReturnSdms(false);
+      setIsReturnDropdownOpen(false);
+      return;
+    }
+
+    // Search only after two characters and discard stale/in-flight requests.
+    setReturnSdmsResults([]);
     setIsSearchingReturnSdms(true);
     setIsReturnDropdownOpen(true);
 
     returnSearchDebounceRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      returnSearchAbortRef.current = controller;
+      const isFaculty = returnMemberType === 'faculty';
+      const endpoint = isFaculty ? '/api/hrms/employees' : '/api/sdms/students';
+      const params = new URLSearchParams({ search: clean, limit: '8' });
+      if (isFaculty) {
+        params.set('status', 'active');
+        params.set('directory', 'true');
+      }
       try {
-        const res = await fetch(`/api/sdms/students?search=${encodeURIComponent(clean)}&limit=8`);
+        const res = await fetch(`${endpoint}?${params}`, { signal: controller.signal });
         if (!res.ok) {
-          throw new Error(`SDMS status ${res.status}`);
+          throw new Error(`${isFaculty ? 'HRMS' : 'SDMS'} status ${res.status}`);
         }
-        const text = await res.text();
-        const data = text ? JSON.parse(text) : {};
-        if (Array.isArray(data.students)) {
-          setReturnSdmsResults(data.students);
-          setIsReturnDropdownOpen(true);
-        } else {
-          setReturnSdmsResults([]);
-        }
+        const data = await res.json();
+        if (controller.signal.aborted) return;
+        const results = isFaculty ? data.employees : data.students;
+        setReturnSdmsResults(Array.isArray(results) ? results : []);
+        setIsReturnDropdownOpen(Array.isArray(results) && results.length > 0);
       } catch (err) {
-        const q = clean.toLowerCase();
-        const localMatches = students.filter(s => 
-          (s.name && s.name.toLowerCase().includes(q)) ||
-          (s.rollNo && s.rollNo.toLowerCase().includes(q)) ||
-          (s.pin_no && s.pin_no.toLowerCase().includes(q))
-        );
-        setReturnSdmsResults(localMatches);
-        setIsReturnDropdownOpen(localMatches.length > 0);
+        if (err.name === 'AbortError') return;
+        console.error(`${isFaculty ? 'HRMS' : 'SDMS'} return search failed:`, err);
+        setReturnSdmsResults([]);
+        setReturnSearchError(`Could not search ${isFaculty ? 'HRMS' : 'SDMS'}. Please try again.`);
+        setIsReturnDropdownOpen(false);
       } finally {
-        setIsSearchingReturnSdms(false);
+        if (returnSearchAbortRef.current === controller) {
+          setIsSearchingReturnSdms(false);
+        }
       }
     }, 250);
   };
 
   const handleSelectReturnStudent = (st) => {
-    setSelectedReturnStudent(st);
-    setReturnInput(`${st.name} (${st.pin_no || st.rollNo})`);
+    const patronId = returnMemberType === 'faculty' ? st.emp_no : (st.pin_no || st.rollNo);
+    const patronName = st.name || st.employee_name;
+    const selectedPatron = { ...st, name: patronName, patronType: returnMemberType };
+    setSelectedReturnStudent(selectedPatron);
+    setReturnInput(`${patronName} (${patronId})`);
     setIsReturnDropdownOpen(false);
 
-    // Filter active loans for this student
-    const stPin = String(st.pin_no || st.rollNo || '').toLowerCase().trim();
-    const stName = String(st.name || '').toLowerCase().trim();
-    const studentLoans = loans.filter(l => 
-      l.status !== 'Returned' && (
-        (stPin && String(l.patronId || '').toLowerCase().trim() === stPin) ||
-        (stName && String(l.patronName || '').toLowerCase().trim() === stName)
-      )
+    const selectedId = String(patronId || '').toLowerCase().trim();
+    const patronLoans = loans.filter(l =>
+      l.status !== 'Returned' &&
+      (l.patronType || l.patron_type || 'student') === returnMemberType &&
+      normalizePatronId(l.patronId || l.patron_id, returnMemberType) === normalizePatronId(selectedId, returnMemberType)
     );
 
-    if (studentLoans.length === 1) {
-      setSelectedLoanForReturn(studentLoans[0]);
+    if (manualReturnBook) {
+      setSelectedLoanForReturn(null);
+    } else if (patronLoans.length === 1) {
+      setSelectedLoanForReturn(patronLoans[0]);
     } else {
       setSelectedLoanForReturn(null);
     }
   };
 
   const handleSelectLoanToReturn = (loan) => {
+    returnSearchAbortRef.current?.abort();
+    setManualReturnBook(null);
     setSelectedLoanForReturn(loan);
     setSelectedReturnStudent({
       name: loan.patronName,
+      emp_no: loan.patronId,
       pin_no: loan.patronId,
       department: loan.department,
+      patronType: loan.patronType || 'student',
       photo: loan.patronPhoto || null
     });
 
     if (loan.patronId) {
-      fetch(`/api/sdms/students/${encodeURIComponent(loan.patronId)}`)
+      const isFaculty = (loan.patronType || 'student') === 'faculty';
+      const controller = new AbortController();
+      returnSearchAbortRef.current = controller;
+      fetch(isFaculty
+        ? `/api/hrms/employees/${encodeURIComponent(loan.patronId)}`
+        : `/api/sdms/students/${encodeURIComponent(loan.patronId)}`,
+      { signal: controller.signal })
         .then(res => res.json())
         .then(data => {
-          if (data && data.student) {
+          const patron = isFaculty ? data.employee : data.student;
+          if (patron && !controller.signal.aborted) {
             setSelectedReturnStudent(prev => ({
               ...prev,
-              ...data.student,
-              photo: data.student.photo || data.student.image || data.student.photo_url
+              ...patron,
+              name: patron.name || patron.employee_name || prev.name,
+              emp_no: patron.emp_no || prev.emp_no,
+              patronType: loan.patronType || 'student'
             }));
           }
         })
-        .catch(() => {});
+        .catch(err => {
+          if (err.name !== 'AbortError') console.error('Failed to load borrower details:', err);
+        });
     }
   };
 
@@ -625,9 +866,57 @@ export default function BookIssuesReturnsView({
     if (onReturnBook) {
       onReturnBook(loan.id || loan._id || loan.accession || loan.bookBarcode);
     }
+    returnSearchAbortRef.current?.abort();
     setSelectedLoanForReturn(null);
     setSelectedReturnStudent(null);
     setReturnInput('');
+  };
+
+  const handleExecuteManualReturn = async () => {
+    if (!manualReturnBook || !selectedReturnStudent) {
+      if (onToast) onToast('Select the returned book and its borrower before continuing.', 'error');
+      return;
+    }
+    if (!manualReturnIssueDate || !manualReturnDueDate || manualReturnDueDate < manualReturnIssueDate) {
+      if (onToast) onToast('Enter valid issue and due dates; the due date cannot be before the issue date.', 'error');
+      return;
+    }
+
+    const patronType = selectedReturnStudent.patronType || selectedReturnStudent.patron_type || returnMemberType;
+    const patronId = patronType === 'faculty'
+      ? selectedReturnStudent.emp_no || selectedReturnStudent.patronId
+      : selectedReturnStudent.pin_no || selectedReturnStudent.rollNo || selectedReturnStudent.patronId;
+    const patronName = selectedReturnStudent.name || selectedReturnStudent.employee_name || selectedReturnStudent.student_name;
+    if (!patronId || !patronName) {
+      if (onToast) onToast('The selected directory member is missing an ID or name.', 'error');
+      return;
+    }
+
+    setIsSubmittingManualReturn(true);
+    try {
+      if (!onManualReturnBook) throw new Error('Manual return is not available.');
+      await onManualReturnBook({
+        barcode: manualReturnBook.copyBarcode,
+        accession: manualReturnBook.accession,
+        patronId: String(patronId),
+        patronType,
+        patronName,
+        department: selectedReturnStudent.department || 'General',
+        issueDate: manualReturnIssueDate,
+        dueDate: manualReturnDueDate,
+        bookTitle: manualReturnBook.book.title
+      });
+      setManualReturnBook(null);
+      setManualReturnIssueDate('');
+      setManualReturnDueDate('');
+      setSelectedReturnStudent(null);
+      setReturnInput('');
+    } catch (error) {
+      console.error('Manual return failed:', error);
+      if (onToast) onToast(`Manual return failed: ${error.message}`, 'error');
+    } finally {
+      setIsSubmittingManualReturn(false);
+    }
   };
 
   const handleExecuteReissue = (targetLoan = null) => {
@@ -647,6 +936,7 @@ export default function BookIssuesReturnsView({
       onRenewLoan(loan.id);
     }
     if (onToast) onToast(`Loan extended by 15 days for "${loan.bookTitle}"!`, 'success');
+    returnSearchAbortRef.current?.abort();
     setSelectedLoanForReturn(null);
   };
 
@@ -664,7 +954,144 @@ export default function BookIssuesReturnsView({
   const [bulkCircData, setBulkCircData] = useState([]);
   const [bulkFileName, setBulkFileName] = useState('');
   const [isImportingBulkCirc, setIsImportingBulkCirc] = useState(false);
+  const [isValidatingBulkMembers, setIsValidatingBulkMembers] = useState(false);
+  const [bulkMemberValidationComplete, setBulkMemberValidationComplete] = useState(false);
   const circFileInputRef = useRef(null);
+  const bulkValidationRunRef = useRef(0);
+  const bulkValidationAbortRef = useRef(null);
+
+  useEffect(() => () => bulkValidationAbortRef.current?.abort(), []);
+
+  const validateBulkMemberRows = async (rows, signal) => {
+    const members = new Map();
+    rows.forEach(row => {
+      const patronId = String(row.patronId || '').trim();
+      if (!patronId) return;
+      const key = `${row.patronType}:${patronId}`;
+      if (!members.has(key)) members.set(key, { key, patronId, patronType: row.patronType });
+    });
+
+    const results = new Map();
+    const queue = [...members.values()];
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < queue.length && !signal.aborted) {
+        const member = queue[nextIndex++];
+        const endpoint = member.patronType === 'faculty'
+          ? `/api/hrms/employees/${encodeURIComponent(member.patronId)}`
+          : `/api/sdms/students/${encodeURIComponent(member.patronId)}`;
+
+        try {
+          const response = await fetch(endpoint, { signal });
+          if (response.status === 404) {
+            results.set(member.key, { status: 'missing' });
+            continue;
+          }
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.error || `Directory returned HTTP ${response.status}`);
+          }
+          const profile = member.patronType === 'faculty' ? payload.employee : payload.student;
+          if (!profile) {
+            results.set(member.key, { status: 'missing' });
+            continue;
+          }
+          results.set(member.key, { status: 'found', profile });
+        } catch (error) {
+          if (signal.aborted || error.name === 'AbortError') return;
+          console.error(`Bulk ${member.patronType} directory lookup failed for ${member.patronId}:`, error);
+          results.set(member.key, {
+            status: 'error',
+            error: error.message || 'Directory lookup failed'
+          });
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(8, queue.length) }, worker));
+    if (signal.aborted) return null;
+
+    return rows.map(row => {
+      const patronId = String(row.patronId || '').trim();
+      if (!patronId) return { ...row, memberDirectoryStatus: 'missing-id' };
+
+      const result = results.get(`${row.patronType}:${patronId}`);
+      if (!result || result.status !== 'found') {
+        return {
+          ...row,
+          memberDirectoryStatus: result?.status || 'error',
+          memberDirectoryError: result?.error
+        };
+      }
+
+      const directoryName = result.profile.name || result.profile.employee_name || result.profile.student_name;
+      return {
+        ...row,
+        patronId: row.patronType === 'faculty'
+          ? String(result.profile.emp_no ?? patronId).trim()
+          : row.patronId,
+        patronName: directoryName || row.patronName,
+        department: result.profile.department || row.department,
+        memberDirectoryStatus: 'found'
+      };
+    });
+  };
+
+  const startBulkMemberValidation = async rows => {
+    bulkValidationAbortRef.current?.abort();
+    const controller = new AbortController();
+    bulkValidationAbortRef.current = controller;
+    const runId = ++bulkValidationRunRef.current;
+    setIsValidatingBulkMembers(true);
+    setBulkMemberValidationComplete(false);
+    setBulkCircData(rows.map(row => ({ ...row, memberDirectoryStatus: 'pending' })));
+
+    try {
+      const validatedRows = await validateBulkMemberRows(rows, controller.signal);
+      if (validatedRows && runId === bulkValidationRunRef.current) {
+        setBulkCircData(validatedRows);
+        setBulkMemberValidationComplete(true);
+      }
+    } catch (error) {
+      if (controller.signal.aborted || runId !== bulkValidationRunRef.current) return;
+      console.error('Bulk member directory validation failed:', error);
+      setBulkCircData(rows.map(row => ({
+        ...row,
+        memberDirectoryStatus: 'error',
+        memberDirectoryError: error.message || 'Directory validation failed'
+      })));
+      setBulkMemberValidationComplete(true);
+    } finally {
+      if (runId === bulkValidationRunRef.current) setIsValidatingBulkMembers(false);
+    }
+  };
+
+  const bulkMissingMembers = [...new Map(
+    bulkCircData
+      .filter(row => row.memberDirectoryStatus === 'missing' || row.memberDirectoryStatus === 'missing-id')
+      .map(row => [
+        row.memberDirectoryStatus === 'missing-id' ? `missing-id:${row.id}` : `${row.patronType}:${row.patronId}`,
+        row
+      ])
+  ).values()];
+  const bulkDirectoryErrors = [...new Map(
+    bulkCircData
+      .filter(row => row.memberDirectoryStatus === 'error')
+      .map(row => [`${row.patronType}:${row.patronId}`, row])
+  ).values()];
+  const bulkDirectoryLookupCount = new Set(
+    bulkCircData
+      .filter(row => row.patronId)
+      .map(row => `${row.patronType}:${row.patronId}`)
+  ).size;
+  const bulkMissingIdCount = bulkMissingMembers.filter(row => row.memberDirectoryStatus === 'missing-id').length;
+  const bulkMatchedRows = bulkCircData.filter(row => row.memberDirectoryStatus === 'found');
+  const bulkSkippedRowsCount = bulkCircData.length - bulkMatchedRows.length;
+  const bulkUnmappedBooks = [...new Map(
+    bulkCircData
+      .filter(row => !row.shelfLocation && !getCatalogShelfForLoan(row))
+      .map(row => [normalizeCatalogCode(row.accession || row.bookBarcode || row.bookTitleId), row])
+  ).values()];
 
   // Helper for spreadsheet date format conversion
   const formatSpreadsheetDate = (raw) => {
@@ -675,6 +1102,18 @@ export default function BookIssuesReturnsView({
       if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
     }
     const str = String(raw).trim();
+    const dayFirstDate = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (dayFirstDate) {
+      const [, day, month, year] = dayFirstDate;
+      const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+      if (
+        date.getUTCFullYear() === Number(year) &&
+        date.getUTCMonth() === Number(month) - 1 &&
+        date.getUTCDate() === Number(day)
+      ) {
+        return date.toISOString().split('T')[0];
+      }
+    }
     const d = new Date(str);
     if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
     return str;
@@ -687,8 +1126,8 @@ export default function BookIssuesReturnsView({
         'AccessionNo': '1001',
         'Barcode': 'BC1001',
         'BookTitle': 'Let Us C',
-        'StudentPIN': '246T1A0501',
-        'StudentName': 'Damerla Sai Saketh',
+        'MemberID': '246T1A0501',
+        'MemberName': 'Damerla Sai Saketh',
         'Department': 'CSE (BTECH)',
         'IssueDate': '2026-10-01',
         'DueDate': '2026-10-31',
@@ -699,8 +1138,8 @@ export default function BookIssuesReturnsView({
         'AccessionNo': '1002',
         'Barcode': 'BC1002',
         'BookTitle': 'Data Structures in C++',
-        'StudentPIN': '236T1A0412',
-        'StudentName': 'K. Rajesh',
+        'MemberID': '236T1A0412',
+        'MemberName': 'K. Rajesh',
         'Department': 'ECE (BTECH)',
         'IssueDate': '2026-09-15',
         'DueDate': '2026-10-15',
@@ -711,13 +1150,25 @@ export default function BookIssuesReturnsView({
         'AccessionNo': '1003',
         'Barcode': 'BC1003',
         'BookTitle': 'Engineering Mechanics',
-        'StudentPIN': '246T1A0301',
-        'StudentName': 'M. Sai Kumar',
+        'MemberID': '246T1A0301',
+        'MemberName': 'M. Sai Kumar',
         'Department': 'MECH (BTECH)',
         'IssueDate': '2026-09-01',
         'DueDate': '2026-10-01',
         'ReturnDate': '',
         'Status': 'Overdue'
+      },
+      {
+        'AccessionNo': '1004',
+        'Barcode': 'BC1004',
+        'BookTitle': 'Database System Concepts',
+        'MemberID': '1042',
+        'MemberName': 'Faculty Member',
+        'Department': 'CSE',
+        'IssueDate': '2026-10-10',
+        'DueDate': '2026-11-09',
+        'ReturnDate': '',
+        'Status': 'Active'
       }
     ];
 
@@ -731,18 +1182,60 @@ export default function BookIssuesReturnsView({
   // Handle uploaded spreadsheet file
   const handleCircSpreadsheetFile = (file) => {
     if (!file) return;
+    bulkValidationAbortRef.current?.abort();
+    const parseRunId = ++bulkValidationRunRef.current;
     setBulkFileName(file.name);
+    setBulkCircData([]);
+    setBulkMemberValidationComplete(false);
+    setIsValidatingBulkMembers(false);
     const reader = new FileReader();
     reader.onload = (e) => {
+      if (parseRunId !== bulkValidationRunRef.current) return;
       try {
         const buffer = e.target.result;
         const workbook = XLSX.read(buffer, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const rawJson = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        const sheetRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        const normalizeHeader = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const headerAliases = new Set([
+          'accessionno', 'accession', 'accno', 'acc', 'barcode', 'serialno', 'serialnumber', 'bookid',
+          'booktitle', 'title', 'titlename', 'titlenar', 'bookname', 'titleid',
+          'memberid', 'memberno', 'membernumber', 'memberidno', 'membernumberid',
+          'employeeid', 'employeeno', 'employeenumber', 'employeeidno', 'empno', 'empid',
+          'facultyid', 'facultyempno', 'studentpin', 'studentpinno', 'pinno', 'pin',
+          'studentrollno', 'studentrollnumber', 'rollno', 'rollnumber', 'admissionno',
+          'admissionnumber', 'patronid', 'patronno', 'studentid', 'id',
+          'membername', 'memberfullname', 'employeename', 'employeefullname',
+          'facultyname', 'facultyfullname', 'studentname', 'studentfullname',
+          'patronname', 'patronfullname', 'borrowername', 'borrower', 'name',
+          'issuedate', 'dateofissue', 'issuedon', 'duedate', 'dateofdue', 'dueon',
+          'expectedreturn', 'returndate', 'dateofreturn', 'returnedon', 'status',
+          'loanstatus', 'department', 'dept', 'branch', 'course', 'division'
+        ]);
+        const headerRowIndex = sheetRows.reduce((bestIndex, row, index) => {
+          const score = row.reduce((total, cell) =>
+            total + (headerAliases.has(normalizeHeader(cell)) ? 1 : 0), 0);
+          return score > bestIndex.score ? { index, score } : bestIndex;
+        }, { index: -1, score: 0 });
+        const rawJson = headerRowIndex.score > 0
+          ? sheetRows.slice(headerRowIndex.index + 1)
+            .filter(row => row.some(value => String(value ?? '').trim() !== ''))
+            .map(row => Object.fromEntries(
+              sheetRows[headerRowIndex.index].map((header, columnIndex) => [
+                String(header || `column${columnIndex}`).trim(),
+                row[columnIndex] ?? ''
+              ])
+            ))
+          : [];
 
         if (!Array.isArray(rawJson) || rawJson.length === 0) {
-          if (onToast) onToast('The uploaded spreadsheet contains no data rows.', 'error');
+          if (onToast) onToast(
+            headerRowIndex.score > 0
+              ? 'The uploaded spreadsheet contains no data rows.'
+              : 'Could not find a header row. Include columns such as Accession No, TitleName, MemberId, MemberName, IssueDate, and DueDate.',
+            'error'
+          );
           return;
         }
 
@@ -765,35 +1258,93 @@ export default function BookIssuesReturnsView({
             `ACC-${idx + 1}`
           ).trim();
 
+          const genericTitle = String(normRow['title'] || '').trim();
           const bookTitle = String(
-            normRow['booktitle'] ||
-            normRow['title'] ||
             normRow['titlename'] ||
+            normRow['titlenar'] ||
+            normRow['booktitle'] ||
             normRow['bookname'] ||
             normRow['book'] ||
+            (genericTitle && !/^\d+$/.test(genericTitle) ? genericTitle : '') ||
             'Library Holding'
           ).trim();
-
-          const patronId = String(
-            normRow['studentpin'] ||
-            normRow['pinno'] ||
-            normRow['pin'] ||
-            normRow['rollno'] ||
-            normRow['rollnumber'] ||
-            normRow['admissionno'] ||
-            normRow['patronid'] ||
-            normRow['studentid'] ||
-            normRow['id'] ||
-            'GENERAL'
+          const bookTitleId = String(
+            normRow['titleid'] ||
+            normRow['title_id'] ||
+            normRow['booktitleid'] ||
+            (/^\d+$/.test(genericTitle) ? genericTitle : '') ||
+            ''
           ).trim();
+          const bookBarcode = String(normRow['barcode'] || '').trim();
 
+          const patronIdAliases = [
+            normRow['memberid'],
+            normRow['memberno'],
+            normRow['membernumber'],
+            normRow['memberidno'],
+            normRow['membernumberid'],
+            normRow['employeeid'],
+            normRow['employeeno'],
+            normRow['employeenumber'],
+            normRow['employeeidno'],
+            normRow['empno'],
+            normRow['empid'],
+            normRow['facultyid'],
+            normRow['facultyempno'],
+            normRow['studentpin'],
+            normRow['studentpinno'],
+            normRow['pinno'],
+            normRow['pin'],
+            normRow['studentrollno'],
+            normRow['studentrollnumber'],
+            normRow['rollno'],
+            normRow['rollnumber'],
+            normRow['admissionno'],
+            normRow['admissionnumber'],
+            normRow['patronid'],
+            normRow['patronno'],
+            normRow['studentid'],
+            normRow['id']
+          ];
+          const patronIdValue = patronIdAliases.find(value =>
+            value !== undefined && value !== null && String(value).trim() !== ''
+          ) || Object.entries(normRow).find(([key, value]) =>
+            value !== undefined &&
+            value !== null &&
+            String(value).trim() !== '' &&
+            !key.includes('name') &&
+            /(member|student|faculty|employee|emp|patron|borrower|roll|pin|admission)/.test(key) &&
+            /(id|no|number|pin|roll|admission)/.test(key)
+          )?.[1];
+          const patronId = String(patronIdValue ?? '').trim();
+          const patronType = /^\d+$/.test(patronId) ? 'faculty' : 'student';
+
+          const patronNameAliases = [
+            normRow['membername'] ||
+            normRow['memberfullname'],
+            normRow['employeename'],
+            normRow['employeefullname'],
+            normRow['facultyname'],
+            normRow['facultyfullname'],
+            normRow['studentname'],
+            normRow['studentfullname'],
+            normRow['patronname'],
+            normRow['patronfullname'],
+            normRow['borrowername'],
+            normRow['borrower'],
+            normRow['name'],
+            normRow['student']
+          ];
           const patronName = String(
-            normRow['studentname'] ||
-            normRow['name'] ||
-            normRow['patronname'] ||
-            normRow['borrower'] ||
-            normRow['student'] ||
-            'SDMS Student'
+            patronNameAliases.find(value =>
+              value !== undefined && value !== null && String(value).trim() !== ''
+            ) || Object.entries(normRow).find(([key, value]) =>
+              value !== undefined &&
+              value !== null &&
+              String(value).trim() !== '' &&
+              /(member|student|faculty|employee|patron|borrower|name)/.test(key) &&
+              /(name|fullname)/.test(key)
+            )?.[1] || (patronType === 'faculty' ? 'HRMS Faculty' : 'SDMS Student')
           ).trim();
 
           const department = String(
@@ -839,9 +1390,11 @@ export default function BookIssuesReturnsView({
           return {
             id: `bulk-circ-${Date.now()}-${idx}`,
             accession,
-            bookBarcode: accession,
+            bookBarcode,
+            bookTitleId,
             bookTitle,
             patronId,
+            patronType,
             patronName,
             department,
             issueDate,
@@ -855,9 +1408,9 @@ export default function BookIssuesReturnsView({
           };
         }).filter(item => item.accession || item.patronId || item.bookTitle);
 
-        setBulkCircData(normalized);
-        if (onToast) onToast(`Parsed ${normalized.length} circulation records from ${file.name}!`, 'success');
+        void startBulkMemberValidation(normalized);
       } catch (err) {
+        if (parseRunId !== bulkValidationRunRef.current) return;
         console.error('Error parsing circulation excel:', err);
         if (onToast) onToast(`Failed to parse spreadsheet: ${err.message}`, 'error');
       }
@@ -866,22 +1419,28 @@ export default function BookIssuesReturnsView({
   };
 
   const handleExecuteBulkCircImport = async () => {
-    if (!bulkCircData || bulkCircData.length === 0) return;
+    if (bulkMatchedRows.length === 0 || isValidatingBulkMembers) return;
     setIsImportingBulkCirc(true);
     try {
       if (onBulkImportCirculations) {
-        await onBulkImportCirculations(bulkCircData);
+        await onBulkImportCirculations(bulkMatchedRows);
       } else {
         const res = await fetch('/api/circulation/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ circulations: bulkCircData })
+          body: JSON.stringify({ circulations: bulkMatchedRows })
         });
         if (!res.ok) throw new Error('Bulk API response failed');
       }
-      if (onToast) onToast(`Successfully imported ${bulkCircData.length} circulation records!`, 'success');
+      if (onToast) {
+        const skippedMessage = bulkSkippedRowsCount > 0
+          ? ` ${bulkSkippedRowsCount} unmatched record(s) were skipped.`
+          : '';
+        onToast(`Successfully imported ${bulkMatchedRows.length} matched circulation records.${skippedMessage}`, 'success');
+      }
       setBulkCircData([]);
       setBulkFileName('');
+      setBulkMemberValidationComplete(false);
       setActiveForm(null);
       setLoanStatusFilter('active');
     } catch (err) {
@@ -891,6 +1450,8 @@ export default function BookIssuesReturnsView({
       setIsImportingBulkCirc(false);
     }
   };
+  const bulkFacultyCount = bulkCircData.filter(row => row.patronType === 'faculty').length;
+  const bulkStudentCount = bulkCircData.length - bulkFacultyCount;
 
   // ==================== STATS CALCULATION ====================
   const totalBooksCount = books.length;
@@ -898,25 +1459,55 @@ export default function BookIssuesReturnsView({
   const totalAvailableCopies = books.reduce((sum, b) => sum + getBookAvailableCount(b), 0);
 
   // Computed Loans categories
-  const activeLoans = loans.filter(l => l.status !== 'Returned');
-  const overdueLoans = loans.filter(l => l.status === 'Overdue');
-  const returnedLoans = loans.filter(l => l.status === 'Returned');
-  const onScheduleLoans = loans.filter(l => l.status === 'Active' || l.status === 'Borrowed');
+  const activeLoans = useMemo(() => loans.filter(isActiveLoan), [loans]);
+  const overdueLoans = useMemo(() => activeLoans.filter(l => String(l.status || '').toLowerCase() === 'overdue'), [activeLoans]);
+  const onScheduleLoans = useMemo(() => activeLoans.filter(l => ['active', 'borrowed'].includes(String(l.status || '').toLowerCase())), [activeLoans]);
+  const activeLoanCountsByPatron = useMemo(() => {
+    const counts = new Map();
+    activeLoans.forEach(loan => {
+      const patronType = loan.patronType || loan.patron_type || 'student';
+      const patronId = normalizePatronId(loan.patronId || loan.patron_id, patronType);
+      if (!patronId) return;
+      const key = `${patronType}:${patronId}`;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }, [activeLoans]);
 
   // Filtered active loans for Return Desk list
   const filteredReturnLoans = activeLoans.filter(l => {
-    // 1. If a student is selected in the Return Desk, filter by their PIN / Roll No or Name
+    // A selected directory patron must match by member ID; names are not unique.
     if (selectedReturnStudent) {
-      const pin = String(selectedReturnStudent.pin_no || selectedReturnStudent.rollNo || selectedReturnStudent.id || selectedReturnStudent.roll_number || selectedReturnStudent.admission_number || '').toLowerCase().trim();
-      const name = String(selectedReturnStudent.name || selectedReturnStudent.student_name || '').toLowerCase().trim();
-      const loanPin = String(l.patronId || l.patron_id || l.student_id || l.studentPin || l.rollNo || l.roll_number || '').toLowerCase().trim();
-      const loanName = String(l.patronName || l.patron_name || l.student_name || l.studentName || '').toLowerCase().trim();
-      const matchesPin = pin && loanPin && (loanPin === pin || loanPin.includes(pin) || pin.includes(loanPin));
-      const matchesName = name && loanName && (loanName === name || loanName.includes(name) || name.includes(loanName));
-      return matchesPin || matchesName;
+      const patronType = selectedReturnStudent.patronType || selectedReturnStudent.patron_type || returnMemberType;
+      if ((l.patronType || l.patron_type || 'student') !== patronType) return false;
+
+      const selectedIds = patronType === 'faculty'
+        ? [selectedReturnStudent.emp_no, selectedReturnStudent.employee_no, selectedReturnStudent.patronId, selectedReturnStudent.patron_id]
+        : [
+            selectedReturnStudent.pin_no,
+            selectedReturnStudent.rollNo,
+            selectedReturnStudent.roll_number,
+            selectedReturnStudent.admission_number,
+            selectedReturnStudent.patronId,
+            selectedReturnStudent.patron_id
+          ];
+      const selectedIdSet = new Set(selectedIds.map(id => normalizePatronId(id, patronType)).filter(Boolean));
+      const loanIds = [
+        l.patronId,
+        l.patron_id,
+        l.student_id,
+        l.studentPin,
+        l.pin_no,
+        l.rollNo,
+        l.roll_number,
+        l.emp_no
+      ].map(id => normalizePatronId(id, patronType)).filter(Boolean);
+
+      return loanIds.some(id => selectedIdSet.has(id));
     }
 
     if (!returnInput) return true;
+    if ((l.patronType || l.patron_type || 'student') !== returnMemberType) return false;
     const raw = returnInput.toLowerCase().trim();
     const cleanNum = raw.replace(/^[#\s]+/, '').replace(/[\s\-_]/g, '');
     const pinMatch = raw.match(/\(([^)]+)\)/);
@@ -950,6 +1541,22 @@ export default function BookIssuesReturnsView({
   // ==================== BOTTOM CIRCULATIONS & HISTORY STATE ====================
   const [loanSearchTerm, setLoanSearchTerm] = useState('');
   const [loanStatusFilter, setLoanStatusFilter] = useState('active'); // 'active' | 'overdue' | 'history' | 'logs'
+  const [memberTypeFilter, setMemberTypeFilter] = useState('all'); // 'all' | 'faculty' | 'student'
+  const [loanDateFrom, setLoanDateFrom] = useState('');
+  const [loanDateTo, setLoanDateTo] = useState('');
+  const memberFilteredLoans = useMemo(
+    () => memberTypeFilter === 'all' ? loans : loans.filter(loan => getPatronType(loan) === memberTypeFilter),
+    [loans, memberTypeFilter]
+  );
+  const memberFilteredActiveLoans = useMemo(() => memberFilteredLoans.filter(isActiveLoan), [memberFilteredLoans]);
+  const memberFilteredOverdueLoans = useMemo(
+    () => memberFilteredActiveLoans.filter(loan => String(loan.status || '').toLowerCase() === 'overdue'),
+    [memberFilteredActiveLoans]
+  );
+  const memberFilteredReturnedLoans = useMemo(
+    () => memberFilteredLoans.filter(loan => !isActiveLoan(loan)),
+    [memberFilteredLoans]
+  );
 
   // Circulation Activity Logs: Merges auditLogs with all issue & return actions
   const circulationLogs = (() => {
@@ -975,6 +1582,7 @@ export default function BookIssuesReturnsView({
       accession: l.payload?.accession || l.payload?.barcode || l.accession || 'Holding',
       patronName: l.payload?.patron_name || l.payload?.patronName || l.patronName || 'SDMS Student',
       patronId: l.payload?.patron_id || l.payload?.patronId || l.patronId || 'SDMS',
+      patronType: l.payload?.patron_type || l.payload?.patronType || l.patronType || l.patron_type,
       actor: l.actor_id || 'System Superadmin',
       timestamp: l.timestamp ? new Date(l.timestamp).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recorded',
       details: typeof l.payload === 'object' ? JSON.stringify(l.payload) : (l.payload || 'Processed at circulation desk')
@@ -988,6 +1596,7 @@ export default function BookIssuesReturnsView({
       accession: ln.accession || ln.bookBarcode || 'ACC',
       patronName: ln.patronName || 'Student Borrower',
       patronId: ln.patronId || 'PIN',
+      patronType: getPatronType(ln),
       actor: 'Circulation Desk Staff',
       timestamp: ln.status === 'Returned' 
         ? (ln.returnDateFormatted || (ln.returnDate ? new Date(ln.returnDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Recently Returned'))
@@ -1000,8 +1609,12 @@ export default function BookIssuesReturnsView({
     return [...fromAudit, ...fromLoans];
   })();
 
+  const memberFilteredCirculationLogs = circulationLogs.filter(log =>
+    memberTypeFilter === 'all' || getPatronType(log) === memberTypeFilter
+  );
+
   // Filtered circulation logs
-  const filteredCirculationLogs = circulationLogs.filter(log => {
+  const filteredCirculationLogs = memberFilteredCirculationLogs.filter(log => {
     if (!loanSearchTerm) return true;
     const q = loanSearchTerm.toLowerCase();
     return (
@@ -1017,9 +1630,23 @@ export default function BookIssuesReturnsView({
 
   // Filtered loans list (Active, Overdue, or History)
   const filteredLoans = loans.filter(l => {
-    if (loanStatusFilter === 'active' && l.status === 'Returned') return false;
-    if (loanStatusFilter === 'overdue' && l.status !== 'Overdue') return false;
-    if (loanStatusFilter === 'history' && l.status !== 'Returned') return false;
+    if (memberTypeFilter !== 'all' && getPatronType(l) !== memberTypeFilter) return false;
+    if (loanStatusFilter === 'active' && !isActiveLoan(l)) return false;
+    if (loanStatusFilter === 'overdue' && (!isActiveLoan(l) || String(l.status || '').toLowerCase() !== 'overdue')) return false;
+    if (loanStatusFilter === 'history' && isActiveLoan(l)) return false;
+
+    if (loanDateFrom || loanDateTo) {
+      const rawIssueDate = l.issue_date || l.issueDate || l.issueDateFormatted;
+      const rawDateString = String(rawIssueDate || '');
+      let issueDateKey = /^\d{4}-\d{2}-\d{2}/.test(rawDateString) ? rawDateString.slice(0, 10) : '';
+      if (!issueDateKey) {
+        const parsedIssueDate = rawIssueDate ? new Date(rawIssueDate) : null;
+        if (!parsedIssueDate || Number.isNaN(parsedIssueDate.getTime())) return false;
+        issueDateKey = `${parsedIssueDate.getFullYear()}-${String(parsedIssueDate.getMonth() + 1).padStart(2, '0')}-${String(parsedIssueDate.getDate()).padStart(2, '0')}`;
+      }
+      if (loanDateFrom && issueDateKey < loanDateFrom) return false;
+      if (loanDateTo && issueDateKey > loanDateTo) return false;
+    }
 
     if (!loanSearchTerm) return true;
     const raw = loanSearchTerm.toLowerCase().trim();
@@ -1059,11 +1686,11 @@ export default function BookIssuesReturnsView({
             </h1>
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
               <Database className="w-3 h-3 text-blue-600" />
-              SDMS Connected
+              Live Directories
             </span>
           </div>
           <p className="text-xs text-zinc-500 mt-1">
-            Search students from SDMS database by Name or PIN Number to issue, return, or re-issue library books
+            Search live SDMS students or HRMS faculty to issue or return library books
           </p>
         </div>
 
@@ -1113,7 +1740,9 @@ export default function BookIssuesReturnsView({
       {/* 2. Desk Form: Modal Popup Dialog for Issue, Return, and Bulk Upload */}
       {activeForm !== null && (
         <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 overflow-y-auto animate-in fade-in duration-200"
+          className={`fixed inset-0 z-[100] flex items-center justify-center ${
+            activeForm === 'bulk' ? 'p-3' : 'p-4'
+          } bg-black/50 overflow-y-auto animate-in fade-in duration-200`}
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setActiveForm(null);
@@ -1121,26 +1750,41 @@ export default function BookIssuesReturnsView({
             }
           }}
         >
-          <div className="bg-white border border-blue-200/90 rounded-2xl shadow-md p-6 sm:p-8 w-full max-w-4xl max-h-[92vh] overflow-y-auto relative animate-in zoom-in-95 duration-200 space-y-6">
+          <div className={`bg-white border border-blue-200/90 rounded-2xl shadow-md relative animate-in zoom-in-95 duration-200 ${
+            activeForm === 'bulk'
+              ? 'flex w-[94vw] max-w-7xl h-[88vh] max-h-[92vh] flex-col overflow-hidden p-4 sm:p-5 space-y-6'
+              : 'w-full max-w-3xl max-h-[88vh] overflow-y-auto p-4 sm:p-5 space-y-4'
+          }`}>
             {/* Top Form Header with Mode Switcher & Close Button */}
-            <div className="flex items-center justify-between pb-4 border-b border-zinc-100">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Desk Mode:</span>
-                <div className="flex items-center gap-1 bg-blue-50 border border-blue-100 p-1 rounded-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-100">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-[110px]">
+                  <h2 className="text-sm font-bold text-blue-950">
+                    {activeForm === 'issue' ? 'Issue books' : activeForm === 'return' ? 'Return books' : 'Bulk upload'}
+                  </h2>
+                  {activeForm !== 'bulk' && (
+                    <p className="text-[11px] text-zinc-500">
+                      {activeForm === 'issue'
+                        ? 'Select a borrower, copies, and due date'
+                        : 'Find a borrower or scan a book number'}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 bg-blue-50 border border-blue-100 p-1 rounded-lg">
                   <button
                     type="button"
                     onClick={() => {
                       setActiveForm('issue');
                       if (!prefilledBook) setSelectedBookBarcode('');
                     }}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
                       activeForm === 'issue'
                         ? 'bg-blue-600 text-white shadow-xs'
                         : 'text-blue-800 hover:bg-blue-100/60'
                     }`}
                   >
                     <BookOpen className="w-3.5 h-3.5" />
-                    <span>Issue Desk</span>
+                    <span>Issue</span>
                   </button>
                   <button
                     type="button"
@@ -1149,26 +1793,26 @@ export default function BookIssuesReturnsView({
                       setSelectedLoanForReturn(null);
                       setSelectedReturnStudent(null);
                     }}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
                       activeForm === 'return'
                         ? 'bg-indigo-600 text-white shadow-xs'
                         : 'text-blue-800 hover:bg-blue-100/60'
                     }`}
                   >
                     <ArrowLeftRight className="w-3.5 h-3.5" />
-                    <span>Return Desk</span>
+                    <span>Return</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveForm('bulk')}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
                       activeForm === 'bulk'
                         ? 'bg-emerald-600 text-white shadow-xs'
                         : 'text-blue-800 hover:bg-blue-100/60'
                     }`}
                   >
                     <FileSpreadsheet className="w-3.5 h-3.5" />
-                    <span>Bulk Upload</span>
+                    <span>Bulk</span>
                   </button>
                 </div>
               </div>
@@ -1179,11 +1823,11 @@ export default function BookIssuesReturnsView({
                   setActiveForm(null);
                   if (onClearPrefilled) onClearPrefilled();
                 }}
-                className="px-3.5 py-1.5 text-xs font-semibold text-blue-700 hover:text-blue-900 hover:bg-blue-50 rounded-xl flex items-center gap-1.5 transition-colors border border-blue-200 cursor-pointer"
-                title="Close form and return to overview"
+                className="self-end sm:self-auto p-2 text-blue-700 hover:text-blue-900 hover:bg-blue-50 rounded-lg flex items-center gap-1.5 transition-colors border border-blue-200 cursor-pointer"
+                title="Close"
               >
-                <X className="w-4 h-4 text-zinc-500" />
-                <span>Close Form</span>
+                <X className="w-4 h-4" />
+                <span className="sm:hidden">Close</span>
               </button>
             </div>
 
@@ -1191,7 +1835,7 @@ export default function BookIssuesReturnsView({
             {/* 2A. ISSUE DESK MODE */}
             {/* ============================================================ */}
             {activeForm === 'issue' && (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {issuedSlip ? (
                   <div className="border border-blue-200 bg-blue-50/40 rounded-2xl p-6 sm:p-7 space-y-4 text-xs animate-in fade-in">
                     <div className="flex items-center justify-between pb-3 border-b border-blue-200">
@@ -1230,11 +1874,11 @@ export default function BookIssuesReturnsView({
 
                       <div className="grid grid-cols-2 gap-3 pt-2 border-t border-blue-100">
                         <div>
-                          <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">Student Name</div>
+                          <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">{issuedSlip.patronType === 'faculty' ? 'Faculty Name' : 'Student Name'}</div>
                           <div className="font-semibold text-sm text-slate-900 mt-0.5">{issuedSlip.patronName}</div>
                         </div>
                         <div>
-                          <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">PIN / Roll No</div>
+                          <div className="text-[10px] text-blue-700 uppercase font-bold tracking-wider">{issuedSlip.patronType === 'faculty' ? 'Employee No' : 'PIN / Roll No'}</div>
                           <div className="font-mono font-bold text-sm text-blue-700 mt-0.5">{issuedSlip.patronId}</div>
                         </div>
                       </div>
@@ -1254,8 +1898,7 @@ export default function BookIssuesReturnsView({
                       <button
                         onClick={() => {
                           setIssuedSlip(null);
-                          setStudentSearchInput('');
-                          setSelectedStudent(null);
+                          handleClearSelectedPatron();
                           setSelectedBooks([]);
                           setBookSearchInput('');
                         }}
@@ -1266,8 +1909,7 @@ export default function BookIssuesReturnsView({
                       <button
                         onClick={() => {
                           setIssuedSlip(null);
-                          setStudentSearchInput('');
-                          setSelectedStudent(null);
+                          handleClearSelectedPatron();
                           setSelectedBooks([]);
                           setBookSearchInput('');
                           setActiveForm(null);
@@ -1279,63 +1921,87 @@ export default function BookIssuesReturnsView({
                     </div>
                   </div>
                 ) : (
-                  <form onSubmit={handleIssueSubmit} className="space-y-6 text-xs">
-                    {/* STEP 1: SDMS STUDENT SEARCH */}
+                  <form onSubmit={handleIssueSubmit} className="space-y-4 text-xs">
+                    {/* STEP 1: SEARCH FOR A STUDENT OR FACULTY MEMBER */}
                     <div className="relative space-y-2" ref={issueDropdownRef}>
                       <div className="flex items-center justify-between">
-                        <label className="block font-bold text-blue-950 uppercase tracking-wider text-xs">
-                          1. Search Student from SDMS Database (By Name or PIN)
+                        <label className="block font-semibold text-sm text-blue-950">
+                          Borrower
                         </label>
-                        <span className="text-[11px] text-blue-600 font-medium">Live verified lookup</span>
+                        <span className="text-[11px] text-blue-600">
+                          Directory: {memberType === 'faculty' ? 'HRMS' : 'SDMS'}
+                        </span>
                       </div>
 
-                      {!selectedStudent ? (
+                      <div className="flex gap-2">
+                        {['student', 'faculty'].map(type => (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => handleMemberTypeChange(type)}
+                            aria-pressed={memberType === type}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                              memberType === type
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'border-blue-200 text-blue-900 hover:bg-blue-100/70 bg-blue-50/40'
+                            }`}
+                          >
+                            {type === 'student' ? 'Student' : 'Faculty'}
+                          </button>
+                        ))}
+                      </div>
+
+                      {!selectedPatron ? (
                         <div className="relative">
                           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-500" />
                           <input
                             type="text"
                             required
-                            value={studentSearchInput}
-                            onChange={(e) => handleIssueStudentSearchChange(e.target.value)}
+                            value={patronSearchInput}
+                            onChange={(e) => handleIssuePatronSearchChange(e.target.value)}
                             onFocus={() => {
-                              if (sdmsResults.length > 0) setIsDropdownOpen(true);
+                              if (directoryResults.length > 0) setIsDropdownOpen(true);
                             }}
-                            placeholder="Type student PIN or Name..."
-                            className="w-full pl-10 pr-10 py-3 border border-blue-200 rounded-2xl text-xs text-slate-900 bg-blue-50/20 focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition-all font-medium"
+                            placeholder={memberType === 'faculty' ? 'Search by employee number or name' : 'Search by student PIN or name'}
+                            className="w-full pl-10 pr-10 py-2.5 border border-blue-200 rounded-lg text-sm text-slate-900 bg-white placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15 transition-all"
                           />
-                          {isSearchingSdms && (
+                          {isSearchingDirectory && (
                             <div className="w-4 h-4 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin absolute right-3.5 top-1/2 -translate-y-1/2" />
                           )}
                         </div>
                       ) : (
-                        <div className="p-4 bg-white border border-blue-200 rounded-2xl text-xs flex items-center justify-between shadow-xs">
-                          <div className="flex items-center gap-4">
-                            <StudentSdmsPhoto student={selectedStudent} size="card" />
-                            <div className="space-y-1">
-                              <div className="font-bold text-blue-950 text-base flex items-center gap-2.5 flex-wrap">
-                                <span>{selectedStudent.name}</span>
-                                <span className="text-xs font-mono px-2.5 py-0.5 rounded-lg bg-blue-100 text-blue-800 font-bold border border-blue-200">
-                                  PIN: {selectedStudent.pin_no || selectedStudent.rollNo}
+                        <div className="p-3 bg-blue-50/40 border border-blue-200 rounded-lg text-xs flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <PatronPhoto
+                              student={{ ...selectedPatron, patronType: memberType }}
+                              className="w-16 h-16 rounded-xl text-xl"
+                            />
+                            <div className="space-y-0.5 min-w-0">
+                              <div className="font-semibold text-blue-950 text-sm flex items-center gap-2 flex-wrap">
+                                <span>{selectedPatron.name || selectedPatron.employee_name}</span>
+                                <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 border border-blue-200">
+                                  {memberType === 'faculty' ? 'Employee ID' : 'PIN'}: {memberType === 'faculty' ? selectedPatron.emp_no : (selectedPatron.pin_no || selectedPatron.rollNo)}
                                 </span>
                               </div>
-                              <div className="text-xs text-slate-600 flex items-center gap-2">
-                                <span className="font-medium">{selectedStudent.department}</span>
-                                {selectedStudent.year && <span>• <strong className="text-blue-900">{selectedStudent.year}</strong></span>}
-                                {selectedStudent.semester && <span>• <span>{selectedStudent.semester}</span></span>}
+                              <div className="text-[11px] text-slate-600 flex items-center gap-2 flex-wrap">
+                                <span className="font-medium">{selectedPatron.department || 'General'}</span>
+                                {memberType === 'student' && selectedPatron.year && <span>• <strong className="text-blue-900">{selectedPatron.year}</strong></span>}
+                                {memberType === 'student' && selectedPatron.semester && <span>• <span>{selectedPatron.semester}</span></span>}
+                                {memberType === 'faculty' && selectedPatron.division && <span>• {selectedPatron.division}</span>}
                               </div>
                             </div>
                           </div>
 
                           <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              Verified SDMS
+                              Verified {memberType === 'faculty' ? 'HRMS' : 'SDMS'}
                             </span>
                             <button
                               type="button"
-                              onClick={handleClearSelectedStudent}
+                              onClick={handleClearSelectedPatron}
                               className="p-1.5 hover:bg-blue-100/70 rounded-xl text-blue-700 transition-colors cursor-pointer"
-                              title="Change Student"
+                              title={`Change ${memberType}`}
                             >
                               <X className="w-4 h-4" />
                             </button>
@@ -1343,57 +2009,63 @@ export default function BookIssuesReturnsView({
                         </div>
                       )}
 
-                      {/* Dropdown for Student Matches */}
-                      {isDropdownOpen && sdmsResults.length > 0 && !selectedStudent && (
+                      {directorySearchError && <p className="text-xs text-rose-600">{directorySearchError}</p>}
+
+                      {isDropdownOpen && directoryResults.length > 0 && !selectedPatron && (
                         <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-md z-50 max-h-60 overflow-y-auto divide-y divide-blue-50 p-1.5">
                           <div className="px-3 py-1.5 text-[10px] font-bold text-blue-700 uppercase tracking-wider flex items-center justify-between">
-                            <span>SDMS Database Matches</span>
-                            <span className="text-slate-400 font-normal">{sdmsResults.length} found</span>
+                            <span>{memberType === 'faculty' ? 'HRMS Employees' : 'SDMS Students'}</span>
+                            <span className="text-slate-400 font-normal">{directoryResults.length} found</span>
                           </div>
-                          {sdmsResults.map(st => (
+                          {rankedDirectoryResults.map(patron => {
+                            const patronId = memberType === 'faculty'
+                              ? patron.emp_no
+                              : (patron.pin_no || patron.rollNo);
+                            return (
                             <div
-                              key={st.id || st.pin_no || st.rollNo}
-                              onClick={() => handleSelectStudent(st)}
+                              key={patronId || patron.id || patron.hrms_id}
+                              onClick={() => handleSelectPatron(patron)}
                               className="p-2.5 hover:bg-blue-50/80 rounded-xl cursor-pointer transition-colors flex items-center justify-between gap-3 text-xs"
                             >
                               <div className="flex items-center gap-2.5 overflow-hidden">
-                                <StudentSdmsPhoto student={st} size="sm" />
+                                <PatronPhoto student={{ ...patron, patronType: memberType }} size="sm" />
                                 <div className="overflow-hidden">
-                                <div className="font-bold text-blue-950 truncate">{st.name}</div>
+                                <div className="font-bold text-blue-950 truncate">{patron.name || patron.employee_name}</div>
                                 <div className="text-[11px] text-slate-500 font-mono flex items-center gap-2 mt-0.5">
-                                  <span className="text-blue-600 font-bold">{st.pin_no || st.rollNo}</span>
+                                  <span className="text-blue-600 font-bold">{patronId}</span>
                                   <span>•</span>
-                                  <span className="truncate">{st.department}</span>
-                                  {st.year && <span>• {st.year}</span>}
+                                  <span className="truncate">{patron.department || 'General'}</span>
+                                  {memberType === 'student' && patron.year && <span>• {patron.year}</span>}
                                 </div>
                               </div>
                               </div>
                               <span className="px-2.5 py-1 text-[11px] font-bold bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white border border-blue-200 rounded-lg transition-colors shrink-0">
-                                Select Student
+                                Select {memberType === 'faculty' ? 'Faculty' : 'Student'}
                               </span>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
 
                     {/* STEP 2: SEARCH BY BOOK NUMBER OR TITLE & SELECT MULTIPLE BOOKS */}
-                    <div className="relative space-y-3" ref={bookDropdownRef}>
+                    <div className="relative space-y-2" ref={bookDropdownRef}>
                       <div className="flex items-center justify-between">
-                        <label className="block font-bold text-blue-950 uppercase tracking-wider text-xs flex items-center gap-2">
-                          <span>2. Search & Select Books to Issue</span>
+                        <label className="block font-semibold text-sm text-blue-950 flex items-center gap-2">
+                          <span>Books to issue</span>
                           {selectedBooks.length > 0 && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
                               {selectedBooks.length} Book{selectedBooks.length > 1 ? 's' : ''} Selected
                             </span>
                           )}
                         </label>
-                        <span className="text-[11px] text-blue-600 font-medium">
-                          Search by Book #, Accession, Serial, Title, or Barcode
+                        <span className="text-[11px] text-blue-600">
+                          Search by individual book number
                         </span>
                       </div>
 
-                      {/* Search Input for Book Number or Title */}
+                      {/* Search by one copy number only */}
                       <div className="relative">
                         <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-500" />
                         <input
@@ -1404,8 +2076,10 @@ export default function BookIssuesReturnsView({
                             setIsBookDropdownOpen(true);
                           }}
                           onFocus={() => setIsBookDropdownOpen(true)}
-                          placeholder="Search by book number (e.g. 21, 19407, #1), Title ID, title, author, or barcode..."
-                          className="w-full pl-10 pr-10 py-3 border border-blue-200 rounded-2xl text-xs text-slate-900 bg-white focus:outline-none focus:border-blue-600 font-medium"
+                          inputMode="numeric"
+                          aria-label="Search book number"
+                          placeholder="Enter a book number"
+                          className="w-full pl-10 pr-10 py-2.5 border border-blue-200 rounded-lg text-sm text-slate-900 bg-white placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                         />
                         {bookSearchInput && (
                           <button
@@ -1425,18 +2099,20 @@ export default function BookIssuesReturnsView({
                       {isBookDropdownOpen && (
                         <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-md z-50 max-h-64 overflow-y-auto divide-y divide-blue-50 p-1.5">
                           <div className="px-3 py-1.5 text-[10px] font-bold text-blue-700 uppercase tracking-wider flex items-center justify-between">
-                            <span>Available Shelf Holdings ({filteredAvailableBooks.length})</span>
-                            <span className="text-slate-400 font-normal">Click "+ Add Book" to include</span>
+                            <span>Matching Available Book Numbers ({filteredAvailableBooks.length})</span>
+                            <span className="text-slate-400 font-normal">Best number matches appear first</span>
                           </div>
                           {filteredAvailableBooks.length > 0 ? (
                             filteredAvailableBooks.map(b => {
-                              const availCount = getBookAvailableCount(b);
-                              const alreadyAddedCount = selectedBooks.filter(sb => (sb.id && sb.id === b.id) || (sb.accession && sb.accession === b.accession)).length;
-                              const canAddMore = alreadyAddedCount < availCount;
+                              const copyNumber = String(b.selectedCopy?.accession || b.accession || '');
+                              const isAlreadySelected = selectedBooks.some(sb =>
+                                String(sb.selectedCopy?.accession || sb.accession || '') === copyNumber
+                              );
+                              const canAddMore = !isAlreadySelected;
 
                               return (
                                 <div
-                                  key={b.barcode || b.id || b.accession}
+                                  key={`${b.id || b._id || b.title}-${copyNumber}`}
                                   onClick={() => {
                                     if (canAddMore) handleAddBookToIssue(b);
                                   }}
@@ -1450,18 +2126,10 @@ export default function BookIssuesReturnsView({
                                     <div className="font-bold text-blue-950 flex items-center gap-2 truncate">
                                       <span>{b.title}</span>
                                       <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded">
-                                        Book #{getSingleBookNumber(b.barcode || b.accession)}
+                                        Book #{copyNumber}
                                       </span>
                                     </div>
                                     <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5 truncate">
-                                      {(b.titleId || b.title_id) && (
-                                        <>
-                                          <span className="font-mono text-blue-700 font-semibold">ID: {b.titleId || b.title_id}</span>
-                                          <span>•</span>
-                                        </>
-                                      )}
-                                      <span>Acc: #{b.accession}</span>
-                                      <span>•</span>
                                       <span>Author: {b.author}</span>
                                       <span>•</span>
                                       <span>Shelf: {b.shelf || 'Central Stack'}</span>
@@ -1469,7 +2137,7 @@ export default function BookIssuesReturnsView({
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0">
                                     <span className="font-bold text-[10px] px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                      {availCount} In Stock
+                                      Available
                                     </span>
                                     {canAddMore ? (
                                       <button
@@ -1480,11 +2148,11 @@ export default function BookIssuesReturnsView({
                                         }}
                                         className="px-2.5 py-1 text-[11px] font-bold bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
                                       >
-                                        + Add Book
+                                        + Add Number
                                       </button>
                                     ) : (
                                       <span className="text-[10px] font-bold text-zinc-500 bg-zinc-200 px-2 py-1 rounded-lg">
-                                        In Basket ({alreadyAddedCount})
+                                        Already Selected
                                       </span>
                                     )}
                                   </div>
@@ -1493,7 +2161,7 @@ export default function BookIssuesReturnsView({
                             })
                           ) : (
                             <div className="p-3 text-center text-xs text-slate-400">
-                              No available books matching number or title "{bookSearchInput}"
+                              No available copy matches book number "{bookSearchInput}"
                             </div>
                           )}
                         </div>
@@ -1502,9 +2170,9 @@ export default function BookIssuesReturnsView({
                       {/* Selected Books to Issue Basket */}
                       {selectedBooks.length > 0 ? (
                         <div className="space-y-2 pt-1">
-                          <div className="text-[11px] font-bold text-blue-950 uppercase tracking-wider flex items-center justify-between">
-                            <span>Selected Books for Issue ({selectedBooks.length})</span>
-                            <span className="text-blue-600 font-medium">Search above to add more books</span>
+                          <div className="text-xs font-semibold text-blue-950 flex items-center justify-between">
+                            <span>Selected books ({selectedBooks.length})</span>
+                            <span className="text-blue-600 font-normal">Search above to add more</span>
                           </div>
 
                           <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -1521,7 +2189,7 @@ export default function BookIssuesReturnsView({
                                     <div className="font-bold text-zinc-900 truncate flex items-center gap-2">
                                       <span>{book.title}</span>
                                       <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded">
-                                        Book #{getSingleBookNumber(book.barcode || book.accession)}
+                                        Book #{book.selectedCopy?.accession || book.accession}
                                       </span>
                                     </div>
                                     <div className="text-[11px] text-zinc-500 mt-0.5 flex items-center gap-2">
@@ -1548,7 +2216,7 @@ export default function BookIssuesReturnsView({
                         </div>
                       ) : (
                         <div className="p-3.5 bg-zinc-50 border border-dashed border-zinc-300 rounded-xl text-center text-xs text-zinc-500">
-                          No books selected yet. Type a book number (#) or title above to select and add books to issue.
+                          No books selected yet. Enter one book number above and select that individual copy to issue.
                         </div>
                       )}
                     </div>
@@ -1556,11 +2224,11 @@ export default function BookIssuesReturnsView({
                     {/* STEP 3: BORROWING WINDOW - FOLLOWS SETTINGS GUIDELINES */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <label className="block font-bold text-blue-950 uppercase tracking-wider text-xs">
-                          3. Borrowing Window (Follows Settings Policy)
+                        <label className="block font-semibold text-sm text-blue-950">
+                          Loan period
                         </label>
-                        <span className="text-[11px] text-blue-600 font-medium">
-                          Policy default: {defaultLoanDays} Days
+                        <span className="text-[11px] text-blue-600">
+                          Standard: {defaultLoanDays} days
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -1569,70 +2237,73 @@ export default function BookIssuesReturnsView({
                             key={days}
                             type="button"
                             onClick={() => setDurationPreset(days)}
-                            className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
                               durationPreset === days
                                 ? 'bg-blue-600 text-white border-blue-600  '
                                 : 'border-blue-200 text-blue-900 hover:bg-blue-100/70 bg-blue-50/40'
                             }`}
                           >
-                            {days} Days {days === defaultLoanDays && '(Standard - Settings Policy)'}
+                            {days} days{days === defaultLoanDays ? ' · Standard' : ''}
                           </button>
                         ))}
                         <button
                           type="button"
                           onClick={() => setDurationPreset('manual')}
-                          className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
                             durationPreset === 'manual'
                               ? 'bg-blue-600 text-white border-blue-600  '
                               : 'border-blue-200 text-blue-900 hover:bg-blue-100/70 bg-blue-50/40'
                           }`}
                         >
-                          Custom Date
+                          Choose due date
                         </button>
                       </div>
 
                       {durationPreset === 'manual' && (
-                        <div className="mt-2.5">
+                        <label className="mt-2.5 block space-y-1 text-[11px] font-medium text-blue-950">
+                          Due date
                           <input
                             type="date"
+                            required
+                            min={todayDate}
                             value={manualDate}
                             onChange={(e) => setManualDate(e.target.value)}
-                            className="px-3.5 py-2 border border-blue-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:border-blue-600"
+                            className="block w-full sm:w-auto px-3 py-2 border border-blue-200 rounded-lg text-sm text-slate-900 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                           />
-                        </div>
+                        </label>
                       )}
 
                       <div className="mt-2 text-xs text-blue-900 flex items-center justify-between flex-wrap gap-2 font-medium">
                         <div className="flex items-center gap-1.5">
-                          <span>Calculated Due Date:</span>
-                          <strong className="text-blue-700 font-bold bg-blue-100 px-2.5 py-0.5 rounded-lg font-mono">
+                          <span>Due date:</span>
+                          <strong className="text-blue-700 font-semibold bg-blue-100 px-2 py-0.5 rounded-md font-mono">
                             {calculatedDueDate}
                           </strong>
                         </div>
                         <span className="text-[11px] text-blue-600">
-                          Quota limit: {maxBooksQuota} books/student • Max renewals: {maxRenewals}
+                          Quota limit: {maxBooksQuota} books/patron • Max renewals: {maxRenewals}
                         </span>
                       </div>
                     </div>
 
                     {/* Form Actions */}
-                    <div className="pt-4 border-t border-blue-100 flex items-center justify-between gap-3">
+                    <div className="pt-3 border-t border-blue-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <span className="text-[11px] text-blue-800/80">
-                        Overdue fine tariff: ₹{dailyFineRate.toFixed(2)}/day (as configured in Settings)
+                        Fine policy: ₹{dailyFineRate.toFixed(2)} per overdue day
                       </span>
 
                       <div className="flex items-center gap-2.5">
                         <button
                           type="button"
                           onClick={() => setActiveForm(null)}
-                          className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-colors cursor-pointer"
+                          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
                         >
                           Cancel
                         </button>
                         <button
                           type="submit"
-                          disabled={isSubmittingIssue || selectedBooks.length === 0 || !selectedStudent || selectedStudent?.status === 'Frozen'}
-                          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                          disabled={isSubmittingIssue || selectedBooks.length === 0 || !selectedPatron || (memberType === 'student' && selectedPatron?.status === 'Frozen')}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-semibold text-xs rounded-lg transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
                         >
                           {isSubmittingIssue ? (
                             <>
@@ -1642,7 +2313,7 @@ export default function BookIssuesReturnsView({
                           ) : (
                             <>
                               <Check className="w-4 h-4" />
-                              <span>Issue {selectedBooks.length > 1 ? `${selectedBooks.length} Books` : 'Book'} to Student</span>
+                              <span>Issue {selectedBooks.length} {selectedBooks.length === 1 ? 'book' : 'books'}</span>
                             </>
                           )}
                         </button>
@@ -1657,16 +2328,34 @@ export default function BookIssuesReturnsView({
             {/* 2B. RETURN & RE-ISSUE DESK MODE (SEARCH TOP & ISSUED ROWS BOTTOM) */}
             {/* ============================================================ */}
             {activeForm === 'return' && (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {/* 1. TOP: FULL-WIDTH SCAN & SEARCH OPTION */}
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <label className="block font-bold text-blue-950 uppercase tracking-wider text-xs">
-                      Scan Barcode / Accession # or Search Student by PIN / Name from SDMS
+                    <label className="block font-semibold text-sm text-blue-950">
+                      Borrower or book number
                     </label>
-                    <span className="text-[11px] text-blue-600 font-medium">
-                      Instant live scan & student filter
+                    <span className="text-[11px] text-blue-600">
+                      Directory: {returnMemberType === 'faculty' ? 'HRMS' : 'SDMS'}
                     </span>
+                  </div>
+
+                  <div className="flex gap-2">
+                    {['student', 'faculty'].map(type => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => handleReturnMemberTypeChange(type)}
+                        aria-pressed={returnMemberType === type}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                          returnMemberType === type
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'border-blue-200 text-blue-900 hover:bg-blue-100/70 bg-blue-50/40'
+                        }`}
+                      >
+                        {type === 'student' ? 'Student' : 'Faculty'}
+                      </button>
+                    ))}
                   </div>
 
                   <div className="relative" ref={returnDropdownRef}>
@@ -1678,52 +2367,51 @@ export default function BookIssuesReturnsView({
                       onFocus={() => {
                         if (returnSdmsResults.length > 0) setIsReturnDropdownOpen(true);
                       }}
-                      placeholder="Scan book barcode / accession #, or type student PIN (e.g. 246T1A0501) / Name (e.g. Manoj)..."
-                      className="w-full pl-10 pr-10 py-3 border border-blue-200 rounded-2xl text-xs text-slate-900 bg-blue-50/20 focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition-all font-mono font-medium"
+                      aria-label="Search borrower or scan book number"
+                      placeholder="Enter name, ID, or book number"
+                      className="w-full pl-10 pr-10 py-2.5 border border-blue-200 rounded-lg text-sm text-slate-900 bg-white placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15 transition-all"
                     />
                     {isSearchingReturnSdms && (
                       <div className="w-4 h-4 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin absolute right-3.5 top-1/2 -translate-y-1/2" />
                     )}
 
-                    {/* Return Desk SDMS Student Matches Dropdown */}
+                    {/* Return Desk Directory Matches */}
                     {isReturnDropdownOpen && returnSdmsResults.length > 0 && (
                       <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-blue-200 rounded-2xl shadow-md z-50 max-h-60 overflow-y-auto divide-y divide-blue-50 p-1">
                         <div className="px-3 py-1.5 text-[10px] font-semibold text-blue-600 uppercase tracking-wider flex items-center justify-between">
-                          <span>SDMS Database Matches</span>
+                          <span>{returnMemberType === 'faculty' ? 'HRMS Employees' : 'SDMS Students'}</span>
                           <span className="text-zinc-400 font-normal">{returnSdmsResults.length} found</span>
                         </div>
-                        {returnSdmsResults.map(st => {
-                          const studentLoanCount = activeLoans.filter(l => 
-                            (l.patronId && (
-                              l.patronId.toLowerCase() === String(st.pin_no || '').toLowerCase() || 
-                              l.patronId.toLowerCase() === String(st.rollNo || '').toLowerCase()
-                            )) ||
-                            (l.patronName && l.patronName.toLowerCase() === st.name.toLowerCase())
-                          ).length;
+                        {rankedReturnResults.map(st => {
+                          const patronId = returnMemberType === 'faculty' ? st.emp_no : (st.pin_no || st.rollNo);
+                          const patronName = st.name || st.employee_name;
+                          const patronLoans = activeLoanCountsByPatron.get(
+                            `${returnMemberType}:${normalizePatronId(patronId, returnMemberType)}`
+                          ) || 0;
 
                           return (
                             <div
-                              key={st.id || st.pin_no || st.rollNo}
+                              key={patronId || st.id || st.hrms_id}
                               onClick={() => handleSelectReturnStudent(st)}
                               className="p-2.5 hover:bg-blue-50/70 rounded-xl cursor-pointer transition-colors flex items-center justify-between gap-3 text-xs"
                             >
                               <div className="flex items-center gap-2.5 overflow-hidden">
-                                <StudentSdmsPhoto student={st} size="sm" />
+                                <PatronPhoto student={{ ...st, patronType: returnMemberType }} size="sm" />
                                 <div className="overflow-hidden">
-                                <div className="font-bold text-zinc-900 truncate">{st.name}</div>
+                                <div className="font-bold text-zinc-900 truncate">{patronName}</div>
                                 <div className="text-[11px] text-zinc-500 font-mono flex items-center gap-2 mt-0.5">
-                                  <span className="text-blue-600 font-semibold">{st.pin_no || st.rollNo}</span>
+                                  <span className="text-blue-600 font-semibold">{patronId}</span>
                                   <span>•</span>
-                                  <span className="truncate">{st.department}</span>
+                                  <span className="truncate">{st.department || 'General'}</span>
                                 </div>
                               </div>
                               </div>
                               <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-md border shrink-0 ${
-                                studentLoanCount > 0 
+                                patronLoans > 0
                                   ? 'bg-amber-50 text-amber-700 border-amber-200' 
                                   : 'bg-zinc-50 text-zinc-600 border-zinc-200'
                               }`}>
-                                {studentLoanCount} Active Loan{studentLoanCount !== 1 ? 's' : ''}
+                                {patronLoans} Active Loan{patronLoans !== 1 ? 's' : ''}
                               </span>
                             </div>
                           );
@@ -1731,17 +2419,26 @@ export default function BookIssuesReturnsView({
                       </div>
                     )}
                   </div>
+                  <p className="text-[11px] text-zinc-500">
+                    Search the selected directory by name or ID, or scan an individual book number.
+                  </p>
+                  {returnSearchError && <p className="text-xs text-rose-600">{returnSearchError}</p>}
 
                   {/* Selected Return Student Badge */}
                   {selectedReturnStudent && (
                     <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl text-xs flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <StudentSdmsPhoto student={selectedReturnStudent} size="md" />
+                        <PatronPhoto
+                          student={selectedReturnStudent}
+                          className="w-16 h-16 rounded-xl text-xl"
+                        />
                         <div>
                           <div className="font-bold text-zinc-900 flex items-center gap-1.5">
-                            <span>{selectedReturnStudent.name}</span>
+                            <span>{selectedReturnStudent.name || selectedReturnStudent.employee_name}</span>
                             <span className="font-mono text-blue-700 text-[10px] font-semibold">
-                              (PIN: {selectedReturnStudent.pin_no || selectedReturnStudent.rollNo})
+                              ({selectedReturnStudent.patronType === 'faculty' ? 'Employee No' : 'PIN'}: {selectedReturnStudent.patronType === 'faculty'
+                                ? selectedReturnStudent.emp_no
+                                : (selectedReturnStudent.pin_no || selectedReturnStudent.rollNo)})
                             </span>
                           </div>
                           <div className="text-[10px] text-zinc-500">{selectedReturnStudent.department}</div>
@@ -1761,6 +2458,85 @@ export default function BookIssuesReturnsView({
                     </div>
                   )}
 
+                  {manualReturnBook && (
+                    <div className="space-y-3 rounded-2xl border border-amber-300 bg-amber-50/70 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-900">
+                            <AlertTriangle className="h-4 w-4 text-amber-600" />
+                            Manual Return — No Active Issue Record
+                          </div>
+                          <div className="mt-1 text-xs font-semibold text-zinc-900">
+                            {manualReturnBook.book.title}
+                            <span className="ml-2 font-mono text-[11px] text-blue-700">
+                              {manualReturnBook.accession || manualReturnBook.copyBarcode}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-amber-800">
+                            Select the borrower above and enter the original issue and due dates to save this return in circulation history.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setManualReturnBook(null);
+                            setManualReturnIssueDate('');
+                            setManualReturnDueDate('');
+                          }}
+                          className="rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                        >
+                          Cancel Manual Return
+                        </button>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="space-y-1 text-[11px] font-semibold text-zinc-700">
+                          Original Issue Date
+                          <input
+                            type="date"
+                            value={manualReturnIssueDate}
+                            onChange={event => setManualReturnIssueDate(event.target.value)}
+                            className="block w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-normal"
+                          />
+                        </label>
+                        <label className="space-y-1 text-[11px] font-semibold text-zinc-700">
+                          Original Due Date
+                          <input
+                            type="date"
+                            value={manualReturnDueDate}
+                            min={manualReturnIssueDate || undefined}
+                            onChange={event => setManualReturnDueDate(event.target.value)}
+                            className="block w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-normal"
+                          />
+                        </label>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-200 pt-3">
+                        <span className="text-[11px] text-amber-900">
+                          {selectedReturnStudent
+                            ? `Borrower: ${selectedReturnStudent.name || selectedReturnStudent.employee_name || selectedReturnStudent.student_name}`
+                            : 'Choose the borrower from the SDMS / HRMS search above.'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleExecuteManualReturn}
+                          disabled={!selectedReturnStudent || !manualReturnIssueDate || !manualReturnDueDate || isSubmittingManualReturn}
+                          className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isSubmittingManualReturn ? (
+                            <>
+                              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                              Recording Return...
+                            </>
+                          ) : (
+                            <>
+                              <Check className="h-3.5 w-3.5" />
+                              Record Manual Return
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Scanned Loan Check-in Card (Shown when a specific loan is scanned or clicked) */}
                   {selectedLoanForReturn && (
                     <div className="border border-blue-200 rounded-2xl p-5 space-y-4 bg-white shadow-xs">
@@ -1768,7 +2544,7 @@ export default function BookIssuesReturnsView({
                         <div className="flex items-center gap-2">
                           <CheckCircle2 className="w-4 h-4 text-blue-600" />
                           <span className="font-bold text-xs text-blue-950 uppercase tracking-wider">
-                            Ready to Check In Book
+                            Book ready to return
                           </span>
                         </div>
                         <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border ${
@@ -1787,12 +2563,15 @@ export default function BookIssuesReturnsView({
                           </span>
                         </div>
                         <div className="flex items-center gap-4">
-                          <StudentSdmsPhoto student={selectedReturnStudent} size="card" />
+                          <PatronPhoto
+                            student={selectedReturnStudent}
+                            className="w-16 h-16 rounded-xl text-xl"
+                          />
                           <div className="space-y-1">
                             <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Borrower</span>
                             <span className="font-bold text-base text-zinc-900 block">{selectedLoanForReturn.patronName}</span>
                             <span className="font-mono text-xs text-blue-700 font-bold block">
-                              PIN: {selectedLoanForReturn.patronId} • {selectedLoanForReturn.department || 'General'}
+                              {selectedLoanForReturn.patronType === 'faculty' ? 'Employee No' : 'PIN'}: {selectedLoanForReturn.patronId} • {selectedLoanForReturn.department || 'General'}
                             </span>
                           </div>
                         </div>
@@ -1877,7 +2656,7 @@ export default function BookIssuesReturnsView({
                             className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
                           >
                             <Check className="w-3.5 h-3.5" />
-                            <span>Confirm Return to Shelf</span>
+                            <span>Confirm return</span>
                           </button>
                         </div>
                       </div>
@@ -1890,7 +2669,11 @@ export default function BookIssuesReturnsView({
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <h4 className="font-bold text-xs uppercase tracking-wider text-blue-950 flex items-center gap-2">
                       <Layers className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Currently Issued Books Ready to Return ({filteredReturnLoans.length})</span>
+                      <span>
+                        {selectedReturnStudent
+                          ? `${selectedReturnStudent.name || selectedReturnStudent.employee_name || 'Selected member'}'s Issued Books`
+                          : 'Currently Issued Books Ready to Return'} ({filteredReturnLoans.length})
+                      </span>
                     </h4>
                     <span className="text-[11px] text-zinc-400">
                       Click any row to inspect or click Return to check in immediately
@@ -1899,7 +2682,9 @@ export default function BookIssuesReturnsView({
 
                   {filteredReturnLoans.length === 0 ? (
                     <div className="py-12 text-center text-xs text-zinc-400 border border-dashed border-zinc-200 rounded-2xl">
-                      {activeLoans.length === 0 
+                      {selectedReturnStudent
+                        ? `No currently issued books found for ${selectedReturnStudent.name || selectedReturnStudent.employee_name || 'this member'}.`
+                        : activeLoans.length === 0
                         ? "Zero circulating loans currently. All physical copies are resting on catalog shelves."
                         : `No active loans match your search term "${returnInput}".`}
                     </div>
@@ -1909,7 +2694,7 @@ export default function BookIssuesReturnsView({
                         <thead className="bg-zinc-50 border-b border-zinc-200 text-[10px] uppercase tracking-wider text-zinc-500 font-bold sticky top-0">
                           <tr>
                             <th className="py-2.5 px-3">Book Title & Accession</th>
-                            <th className="py-2.5 px-3">Borrower (SDMS PIN)</th>
+                            <th className="py-2.5 px-3">Borrower</th>
                             <th className="py-2.5 px-3">Issue Date</th>
                             <th className="py-2.5 px-3">Expected Due Date</th>
                             <th className="py-2.5 px-3 text-center">Status</th>
@@ -1932,6 +2717,9 @@ export default function BookIssuesReturnsView({
                                   <div className="font-bold text-zinc-900">{loan.bookTitle}</div>
                                   <span className="font-mono text-[10px] text-zinc-500 font-medium">
                                     Book No: #{getSingleBookNumber(loan.accession || loan.bookBarcode)}
+                                  </span>
+                                  <span className="mt-0.5 block text-[10px] font-medium text-emerald-700">
+                                    Shelf: {loan.shelfLocation || getCatalogShelfForLoan(loan) || 'Not mapped in catalog'}
                                   </span>
                                 </td>
                                 <td className="py-3 px-3">
@@ -1994,7 +2782,7 @@ export default function BookIssuesReturnsView({
             {/* 2C. BULK CIRCULATION EXCEL / CSV IMPORT DESK */}
             {/* ============================================================ */}
             {activeForm === 'bulk' && (
-              <div className="space-y-6">
+              <div className="flex min-h-0 flex-1 flex-col gap-4">
                 <div className="flex items-center justify-between pb-3 border-b border-zinc-100 flex-wrap gap-2">
                   <div>
                     <h3 className="font-bold text-sm text-zinc-900 flex items-center gap-2">
@@ -2053,12 +2841,12 @@ export default function BookIssuesReturnsView({
                     </div>
                     <div className="inline-flex items-center gap-2 px-3 py-1 bg-white border border-emerald-200 rounded-lg text-[11px] font-semibold text-emerald-700">
                       <FileSpreadsheet className="w-3.5 h-3.5" />
-                      <span>Headers: AccessionNo, BookTitle, StudentPIN, StudentName, IssueDate, DueDate, ReturnDate, Status</span>
+                      <span>Headers: Accession No, TitleId, TitleName, MemberId, MemberName, IssueDate, DueDate (also supports Department, ReturnDate, Status)</span>
                     </div>
                   </div>
                 ) : (
                   /* Parsed Circulation Rows Preview & Import Confirmation */
-                  <div className="space-y-4">
+                  <div className="flex min-h-0 flex-1 flex-col gap-3">
                     <div className="flex items-center justify-between p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex-wrap gap-2">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-xs">
@@ -2066,18 +2854,34 @@ export default function BookIssuesReturnsView({
                         </div>
                         <div>
                           <div className="font-bold text-xs text-emerald-950">
-                            {bulkFileName || 'Spreadsheet'} Ready to Import
+                            {bulkFileName || 'Spreadsheet'} {isValidatingBulkMembers ? 'Checking Member Directories' : 'Ready to Import'}
                           </div>
                           <div className="text-[11px] text-emerald-700">
-                            Successfully parsed {bulkCircData.length} circulation records. Review and confirm below.
+                            {isValidatingBulkMembers
+                              ? `Parsed ${bulkCircData.length} records. Matching member IDs with SDMS and HRMS.`
+                              : bulkMemberValidationComplete
+                              ? `${bulkMatchedRows.length} matched rows will be imported; ${bulkSkippedRowsCount} unmatched rows will be skipped.`
+                              : `Parsed ${bulkCircData.length} circulation records. Review and confirm below.`}
+                          </div>
+                          <div className="flex flex-wrap gap-2 mt-1.5 text-[10px] font-bold">
+                            <span className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">
+                              Faculty: {bulkFacultyCount}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                              Students: {bulkStudentCount}
+                            </span>
                           </div>
                         </div>
                       </div>
                       <button
                         type="button"
                         onClick={() => {
+                          bulkValidationAbortRef.current?.abort();
+                          bulkValidationRunRef.current += 1;
                           setBulkCircData([]);
                           setBulkFileName('');
+                          setBulkMemberValidationComplete(false);
+                          setIsValidatingBulkMembers(false);
                         }}
                         className="px-3 py-1.5 text-xs text-zinc-600 hover:text-zinc-900 border border-zinc-200 rounded-xl hover:bg-white transition-colors cursor-pointer"
                       >
@@ -2085,65 +2889,215 @@ export default function BookIssuesReturnsView({
                       </button>
                     </div>
 
+                    {isValidatingBulkMembers && (
+                      <div className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                        <div className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700" />
+                        <span>Checking {bulkDirectoryLookupCount} unique member IDs against SDMS and HRMS...</span>
+                      </div>
+                    )}
+
+                    {bulkMemberValidationComplete && bulkMissingMembers.length > 0 && (
+                      <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950">
+                        <div className="flex items-center gap-2 font-bold">
+                          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+                          <span>{bulkMissingMembers.length} member record(s) need attention.</span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-amber-800">
+                          {bulkMissingIdCount
+                            ? `${bulkMissingIdCount} record(s) have no member ID; the others were not found in SDMS or HRMS. `
+                            : 'These IDs were not found in SDMS or HRMS. '}
+                          These rows will be skipped; only directory-matched rows will be imported.
+                        </p>
+                        <ul className="mt-2 grid max-h-20 grid-cols-1 gap-x-4 gap-y-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+                          {bulkMissingMembers.map(row => (
+                            <li key={row.id} className="truncate">
+                              <strong>{row.patronId || 'Missing ID'}</strong>
+                              {row.patronName ? ` — ${row.patronName}` : ''}
+                              <span className="text-amber-700">
+                                {row.patronId ? ` (${row.patronType === 'faculty' ? 'HRMS' : 'SDMS'})` : ''}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {bulkMemberValidationComplete && bulkDirectoryErrors.length > 0 && (
+                      <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
+                        <div>
+                          <div className="font-bold">Could not verify {bulkDirectoryErrors.length} member ID(s).</div>
+                          <p className="mt-0.5 text-[11px]">Directory lookup errors are not treated as missing members.</p>
+                          <ul className="mt-1 max-h-12 overflow-y-auto text-[10px]">
+                            {bulkDirectoryErrors.slice(0, 8).map(row => (
+                              <li key={`${row.patronType}:${row.patronId}`}>
+                                {row.patronId} ({row.patronType === 'faculty' ? 'HRMS' : 'SDMS'}): {row.memberDirectoryError}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void startBulkMemberValidation(bulkCircData)}
+                          className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 font-semibold text-rose-800 hover:bg-rose-100"
+                        >
+                          Retry verification
+                        </button>
+                      </div>
+                    )}
+
+                    {bulkMemberValidationComplete && bulkMissingMembers.length === 0 && bulkDirectoryErrors.length === 0 && (
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                        All member IDs matched with SDMS or HRMS. Names and departments are populated from the directories.
+                      </div>
+                    )}
+
+                    {bulkUnmappedBooks.length > 0 && (
+                      <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <div className="font-bold">
+                          Shelf location could not be matched for {bulkUnmappedBooks.length} book row(s).
+                        </div>
+                        <p className="mt-0.5 text-[11px]">
+                          Those records can still be imported, but their shelf will show as “Not mapped in catalog.”
+                          Check that the spreadsheet accession/barcode exists in the book catalog.
+                        </p>
+                      </div>
+                    )}
+
                     {/* Preview Table */}
-                    <div className="border border-zinc-200 rounded-2xl overflow-hidden max-h-[300px] overflow-y-auto">
-                      <table className="w-full text-left text-xs border-collapse">
+                    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden border border-zinc-200 rounded-2xl">
+                      <table className="w-full table-fixed text-left text-xs border-collapse">
+                        <colgroup>
+                          <col className="w-[4%]" />
+                          <col className="w-[11%]" />
+                          <col className="w-[16%]" />
+                          <col className="w-[20%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[9%]" />
+                        </colgroup>
                         <thead className="bg-zinc-50 border-b border-zinc-200 text-[10px] uppercase tracking-wider text-zinc-500 font-bold sticky top-0">
                           <tr>
-                            <th className="py-2.5 px-3">#</th>
-                            <th className="py-2.5 px-3">Accession / Barcode</th>
-                            <th className="py-2.5 px-3">Book Title</th>
-                            <th className="py-2.5 px-3">Student PIN & Name</th>
-                            <th className="py-2.5 px-3">Department</th>
-                            <th className="py-2.5 px-3">Issue Date</th>
-                            <th className="py-2.5 px-3">Due Date</th>
-                            <th className="py-2.5 px-3">Return Date</th>
-                            <th className="py-2.5 px-3 text-center">Status</th>
+                            <th className="py-2.5 px-2 text-center">#</th>
+                            <th className="py-2.5 px-2">Accession / Barcode</th>
+                            <th className="py-2.5 px-2">Book Title</th>
+                            <th className="py-2.5 px-2">Member Type, ID & Name</th>
+                            <th className="py-2.5 px-2">Department</th>
+                            <th className="py-2.5 px-2 text-center">Issue Date</th>
+                            <th className="py-2.5 px-2 text-center">Due Date</th>
+                            <th className="py-2.5 px-2 text-center">Return Date</th>
+                            <th className="py-2.5 px-2 text-center">Status</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-100">
-                          {bulkCircData.map((row, idx) => (
-                            <tr key={idx} className="hover:bg-zinc-50/70 transition-colors">
-                              <td className="py-2 px-3 text-zinc-400 font-mono text-[10px]">{idx + 1}</td>
-                              <td className="py-2 px-3 font-mono font-bold text-blue-700">{row.accession || row.bookBarcode || '—'}</td>
-                              <td className="py-2 px-3 font-semibold text-zinc-900">{row.bookTitle || 'Untitled Book'}</td>
-                              <td className="py-2 px-3">
-                                <span className="font-bold text-zinc-800">{row.patronName}</span>
-                                <span className="font-mono text-blue-600 ml-1.5 font-semibold">({row.patronId})</span>
-                              </td>
-                              <td className="py-2 px-3 text-zinc-600">{row.department || 'General'}</td>
-                              <td className="py-2 px-3 text-zinc-600">{row.issueDateFormatted || row.issueDate}</td>
-                              <td className="py-2 px-3 font-semibold text-zinc-900">{row.dueDateFormatted || row.dueDate}</td>
-                              <td className="py-2 px-3 text-emerald-800 font-medium">{row.returnDateFormatted || row.returnDate || '—'}</td>
-                              <td className="py-2 px-3 text-center">
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  row.status === 'Returned'
-                                    ? 'bg-teal-50 text-teal-700 border border-teal-200'
-                                    : row.status === 'Overdue'
-                                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                    : 'bg-blue-50 text-blue-700 border border-blue-200'
-                                }`}>
-                                  {row.status}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
+                          {[
+                            { type: 'faculty', title: 'Faculty — numeric member IDs', tone: 'bg-violet-50 text-violet-800' },
+                            { type: 'student', title: 'Students — alphanumeric member IDs', tone: 'bg-blue-50 text-blue-800' }
+                          ].map(group => {
+                            const rows = bulkCircData
+                              .map((row, index) => ({ row, index }))
+                              .filter(({ row }) => row.patronType === group.type);
+                            if (rows.length === 0) return null;
+                            return [
+                              <tr key={`${group.type}-heading`} className={group.tone}>
+                                <td colSpan={9} className="py-2 px-3 font-bold text-[10px] uppercase tracking-wider">
+                                  {group.title} ({rows.length})
+                                </td>
+                              </tr>,
+                              ...rows.map(({ row, index }) => (
+                                <tr
+                                  key={index}
+                                  className={`transition-colors ${
+                                    row.memberDirectoryStatus === 'missing' || row.memberDirectoryStatus === 'missing-id'
+                                      ? 'bg-amber-50/50 hover:bg-amber-100/70'
+                                      : 'hover:bg-zinc-50/70'
+                                  }`}
+                                >
+                                  <td className="py-2 px-2 text-center text-zinc-400 font-mono text-[10px]">{index + 1}</td>
+                                  <td className="py-2 px-2 font-mono font-bold text-blue-700 break-words">{row.accession || row.bookBarcode || '—'}</td>
+                                  <td className="py-2 px-2 break-words">
+                                    <div className="font-semibold text-zinc-900">{row.bookTitle || 'Untitled Book'}</div>
+                                    {row.bookTitleId && (
+                                      <div className="mt-0.5 text-[10px] font-mono text-blue-700">
+                                        Title ID: {row.bookTitleId}
+                                      </div>
+                                    )}
+                                    <div className={`mt-0.5 text-[10px] font-medium ${
+                                      row.shelfLocation || getCatalogShelfForLoan(row)
+                                        ? 'text-emerald-700'
+                                        : 'text-amber-700'
+                                    }`}>
+                                      Shelf: {row.shelfLocation || getCatalogShelfForLoan(row) || 'Not mapped in catalog'}
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-2 break-words">
+                                    <span className={`inline-block px-1.5 py-0.5 mb-1 rounded text-[9px] font-bold ${
+                                      row.patronType === 'faculty'
+                                        ? 'bg-violet-50 text-violet-700 border border-violet-200'
+                                        : 'bg-blue-50 text-blue-700 border border-blue-200'
+                                    }`}>
+                                      {row.patronType === 'faculty' ? 'FACULTY · HRMS' : 'STUDENT · SDMS'}
+                                    </span>
+                                    <div className="flex flex-wrap items-baseline gap-x-1.5">
+                                      <span className="font-mono text-blue-600 font-semibold">{row.patronId}</span>
+                                      <span className="font-bold text-zinc-800">{row.patronName}</span>
+                                    </div>
+                                    {row.memberDirectoryStatus === 'found' && (
+                                      <span className="mt-1 inline-block text-[9px] font-semibold text-emerald-700">Directory matched</span>
+                                    )}
+                                    {(row.memberDirectoryStatus === 'missing' || row.memberDirectoryStatus === 'missing-id') && (
+                                      <span className="mt-1 inline-block text-[9px] font-bold text-amber-700">
+                                        {row.memberDirectoryStatus === 'missing-id' ? 'Member ID missing' : 'Not found in directory'}
+                                      </span>
+                                    )}
+                                    {row.memberDirectoryStatus === 'error' && (
+                                      <span className="mt-1 inline-block text-[9px] font-bold text-rose-700">Directory check failed</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-2 text-zinc-600 break-words">{row.department || 'General'}</td>
+                                  <td className="py-2 px-2 text-center text-zinc-600 whitespace-nowrap">{row.issueDateFormatted || row.issueDate}</td>
+                                  <td className="py-2 px-2 text-center font-semibold text-zinc-900 whitespace-nowrap">{row.dueDateFormatted || row.dueDate}</td>
+                                  <td className="py-2 px-2 text-center text-emerald-800 font-medium whitespace-nowrap">{row.returnDateFormatted || row.returnDate || '—'}</td>
+                                  <td className="py-2 px-2 text-center">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      row.status === 'Returned'
+                                        ? 'bg-teal-50 text-teal-700 border border-teal-200'
+                                        : row.status === 'Overdue'
+                                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                        : 'bg-blue-50 text-blue-700 border border-blue-200'
+                                    }`}>
+                                      {row.status}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))
+                            ];
+                          })}
                         </tbody>
                       </table>
                     </div>
 
                     {/* Actions Bar */}
-                    <div className="flex items-center justify-between pt-3 border-t border-zinc-100">
+                    <div className="sticky bottom-0 z-10 flex shrink-0 items-center justify-between gap-3 border-t border-zinc-100 bg-white pt-3 pb-1">
                       <span className="text-xs text-zinc-500">
-                        Total <strong>{bulkCircData.length}</strong> circulation items will be saved to live database.
+                        Importing <strong>{bulkMatchedRows.length}</strong> matched records
+                        {bulkSkippedRowsCount > 0 && (
+                          <> · Skipping <strong>{bulkSkippedRowsCount}</strong> unmatched</>
+                        )}
                       </span>
                       <button
                         type="button"
-                        disabled={isImportingBulkCirc}
+                        disabled={isImportingBulkCirc || isValidatingBulkMembers || !bulkMemberValidationComplete || bulkMatchedRows.length === 0}
                         onClick={handleExecuteBulkCircImport}
-                        className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all  flex items-center gap-2 cursor-pointer disabled:opacity-60"
+                        className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        {isImportingBulkCirc ? (
+                        {isValidatingBulkMembers ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            <span>Verifying Members...</span>
+                          </>
+                        ) : isImportingBulkCirc ? (
                           <>
                             <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                             <span>Importing Records...</span>
@@ -2151,7 +3105,7 @@ export default function BookIssuesReturnsView({
                         ) : (
                           <>
                             <CheckCircle2 className="w-4 h-4 text-white" />
-                            <span>Confirm & Import All Records ({bulkCircData.length})</span>
+                            <span>Import Matched Records ({bulkMatchedRows.length})</span>
                           </>
                         )}
                       </button>
@@ -2194,8 +3148,8 @@ export default function BookIssuesReturnsView({
             }`}
           >
             <div className="text-[11px] font-semibold text-blue-600 uppercase tracking-wider">Issued Books (Active)</div>
-            <div className="text-2xl font-black text-zinc-900 mt-1">{activeLoans.length} <span className="text-xs font-semibold text-slate-500">Loans</span></div>
-            <div className="text-[10px] text-zinc-400 mt-0.5">Currently with student borrowers</div>
+            <div className="text-2xl font-black text-zinc-900 mt-1">{memberFilteredActiveLoans.length} <span className="text-xs font-semibold text-slate-500">Loans</span></div>
+            <div className="text-[10px] text-zinc-400 mt-0.5">Faculty and students currently borrowing</div>
           </div>
 
           {/* Card 4: Overdue Defaults */}
@@ -2208,7 +3162,7 @@ export default function BookIssuesReturnsView({
             }`}
           >
             <div className="text-[11px] font-semibold text-rose-600 uppercase tracking-wider">Overdue Defaults</div>
-            <div className="text-2xl font-black text-rose-700 mt-1">{overdueLoans.length}</div>
+            <div className="text-2xl font-black text-rose-700 mt-1">{memberFilteredOverdueLoans.length}</div>
             <div className="text-[10px] text-zinc-400 mt-0.5">Accounts on penalty tariff</div>
           </div>
 
@@ -2225,13 +3179,35 @@ export default function BookIssuesReturnsView({
               <span>Circulation History</span>
               <span className="text-[10px] text-teal-600 font-normal">View →</span>
             </div>
-            <div className="text-2xl font-black text-teal-800 mt-1">{returnedLoans.length}</div>
+            <div className="text-2xl font-black text-teal-800 mt-1">{memberFilteredReturnedLoans.length}</div>
             <div className="text-[10px] text-teal-600 mt-0.5">Completed & returned records</div>
           </div>
         </div>
 
         {/* Search & Filter Toolbar: Active, Overdue, History, and Logs */}
         <div className="bg-white border border-zinc-200/90 rounded-2xl shadow-sm p-4 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs font-medium text-zinc-500">Member type</span>
+            <div className="inline-flex items-center gap-1 border border-zinc-200 rounded-xl p-0.5 bg-zinc-50" role="group" aria-label="Filter by member type">
+              {[
+                { value: 'all', label: 'All' },
+                { value: 'faculty', label: 'Faculty' },
+                { value: 'student', label: 'Students' }
+              ].map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={memberTypeFilter === option.value}
+                  onClick={() => setMemberTypeFilter(option.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    memberTypeFilter === option.value ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-600 hover:text-zinc-900'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="relative flex-1 max-w-md">
               <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
@@ -2244,6 +3220,45 @@ export default function BookIssuesReturnsView({
               />
             </div>
 
+            {loanStatusFilter !== 'logs' && (
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span className="inline-flex items-center gap-1 text-zinc-500 font-medium">
+                  <Calendar className="w-3.5 h-3.5" />
+                  Issue date
+                </span>
+                <label className="sr-only" htmlFor="loan-date-from">Issue date from</label>
+                <input
+                  id="loan-date-from"
+                  type="date"
+                  value={loanDateFrom}
+                  max={loanDateTo || undefined}
+                  onChange={event => setLoanDateFrom(event.target.value)}
+                  className="px-2.5 py-2 border border-zinc-200 rounded-lg text-zinc-700 focus:outline-none focus:border-blue-600"
+                  aria-label="Issue date from"
+                />
+                <span className="text-zinc-400">to</span>
+                <label className="sr-only" htmlFor="loan-date-to">Issue date to</label>
+                <input
+                  id="loan-date-to"
+                  type="date"
+                  value={loanDateTo}
+                  min={loanDateFrom || undefined}
+                  onChange={event => setLoanDateTo(event.target.value)}
+                  className="px-2.5 py-2 border border-zinc-200 rounded-lg text-zinc-700 focus:outline-none focus:border-blue-600"
+                  aria-label="Issue date to"
+                />
+                {(loanDateFrom || loanDateTo) && (
+                  <button
+                    type="button"
+                    onClick={() => { setLoanDateFrom(''); setLoanDateTo(''); }}
+                    className="px-2 py-1.5 text-blue-700 hover:text-blue-900 font-semibold"
+                  >
+                    Clear dates
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Clean filter buttons: Issued Books, Overdue, Return History, and Activity Logs */}
             <div className="flex items-center border border-zinc-200 rounded-xl p-0.5 text-xs bg-zinc-50 flex-wrap">
               <button
@@ -2253,7 +3268,7 @@ export default function BookIssuesReturnsView({
                   loanStatusFilter === 'active' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Issued Books ({activeLoans.length})
+                Issued Books ({memberFilteredActiveLoans.length})
               </button>
               <button
                 type="button"
@@ -2262,7 +3277,7 @@ export default function BookIssuesReturnsView({
                   loanStatusFilter === 'overdue' ? 'bg-zinc-900 text-white shadow-xs' : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                Overdue Books ({overdueLoans.length})
+                Overdue Books ({memberFilteredOverdueLoans.length})
               </button>
               <button
                 type="button"
@@ -2271,7 +3286,7 @@ export default function BookIssuesReturnsView({
                   loanStatusFilter === 'history' ? 'bg-zinc-900 text-white shadow-xs' : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                Return History ({returnedLoans.length})
+                Return History ({memberFilteredReturnedLoans.length})
               </button>
               <button
                 type="button"
@@ -2281,7 +3296,7 @@ export default function BookIssuesReturnsView({
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
-                <span>Activity Logs ({circulationLogs.length})</span>
+                <span>Activity Logs ({memberFilteredCirculationLogs.length})</span>
               </button>
             </div>
           </div>
@@ -2300,7 +3315,7 @@ export default function BookIssuesReturnsView({
                       <th className="py-3 px-3">Date & Time</th>
                       <th className="py-3 px-3">Action</th>
                       <th className="py-3 px-3">Book & Number</th>
-                      <th className="py-3 px-3">Student (Roll No)</th>
+                      <th className="py-3 px-3">Member Name & ID</th>
                       <th className="py-3 px-3">Staff</th>
                       <th className="py-3 px-3">Details</th>
                     </tr>
@@ -2378,7 +3393,7 @@ export default function BookIssuesReturnsView({
                   <thead>
                     <tr className="border-b border-zinc-200 bg-zinc-50/70 text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
                       <th className="py-3 px-3">Book Title & Number</th>
-                      <th className="py-3 px-3">Student Name & Roll No</th>
+                      <th className="py-3 px-3">Member Name & ID</th>
                       <th className="py-3 px-3">Department</th>
                       <th className="py-3 px-3">Issue Date</th>
                       <th className="py-3 px-3">Due Date</th>
@@ -2404,6 +3419,9 @@ export default function BookIssuesReturnsView({
                             <div className="font-bold text-zinc-900">{loan.bookTitle}</div>
                             <span className="font-mono text-[10px] text-zinc-500 font-medium">
                               Book No: #{getSingleBookNumber(loan.accession || loan.bookBarcode)}
+                            </span>
+                            <span className="mt-0.5 block text-[10px] font-medium text-emerald-700">
+                              Shelf: {loan.shelfLocation || getCatalogShelfForLoan(loan) || 'Not mapped in catalog'}
                             </span>
                           </td>
 
@@ -2514,7 +3532,7 @@ export default function BookIssuesReturnsView({
       {/* 3. Book Issue Details Popup Dialog */}
       {inspectingLoan && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 overflow-y-auto animate-in fade-in duration-200"
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 overflow-y-auto animate-in fade-in duration-200"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setInspectingLoan(null);
@@ -2561,13 +3579,16 @@ export default function BookIssuesReturnsView({
               </div>
             </div>
 
-            {/* Borrower Card with enlarged SDMS Photo */}
+            {/* Borrower Card with a directory-backed profile photo */}
             <div className="p-4 sm:p-5 bg-white border border-blue-200 rounded-2xl flex items-center justify-between gap-4 shadow-xs">
               <div className="flex items-center gap-4">
-                <StudentSdmsPhoto 
+                <PatronPhoto
                   student={inspectingStudent || {
                     name: inspectingLoan.patronName,
                     pin_no: inspectingLoan.patronId,
+                    emp_no: inspectingLoan.patronId,
+                    patronType: inspectingLoan.patronType || 'student',
+                    has_photo: inspectingLoan.patronType === 'faculty',
                     department: inspectingLoan.department,
                     photo: inspectingLoan.patronPhoto
                   }} 
@@ -2575,12 +3596,12 @@ export default function BookIssuesReturnsView({
                 />
                 <div className="space-y-1">
                   <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
-                    Student Details
+                    {inspectingLoan.patronType === 'faculty' ? 'Faculty Details' : 'Student Details'}
                   </span>
                   <div className="font-bold text-blue-950 text-base flex items-center gap-2.5 flex-wrap">
                     <span>{inspectingLoan.patronName}</span>
                     <span className="text-xs font-mono px-2.5 py-0.5 rounded-lg bg-blue-100 text-blue-800 font-bold border border-blue-200">
-                      Roll No / PIN: {inspectingLoan.patronId}
+                      {inspectingLoan.patronType === 'faculty' ? 'Employee No' : 'Roll No / PIN'}: {inspectingLoan.patronId}
                     </span>
                   </div>
                   <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
@@ -2599,7 +3620,7 @@ export default function BookIssuesReturnsView({
               <div className="hidden sm:flex flex-col items-end gap-1 shrink-0">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  Verified Student
+                  Verified {inspectingLoan.patronType === 'faculty' ? 'HRMS Faculty' : 'SDMS Student'}
                 </span>
                 <span className="text-[10px] text-slate-400">College Database</span>
               </div>

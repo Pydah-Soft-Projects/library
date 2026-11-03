@@ -113,14 +113,16 @@ async function getEmployees({ search = '', department = '', division = '', statu
       query.is_active = false;
     }
 
-    if (search && search.trim()) {
-      const term = search.trim();
+    const term = String(search || '').trim();
+    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (term) {
       query.$or = [
-        { employee_name: { $regex: term, $options: 'i' } },
-        { emp_no: { $regex: term, $options: 'i' } },
-        { email: { $regex: term, $options: 'i' } },
-        { phone_number: { $regex: term, $options: 'i' } }
+        { employee_name: { $regex: escapedTerm, $options: 'i' } },
+        { emp_no: { $regex: escapedTerm, $options: 'i' } },
+        { email: { $regex: escapedTerm, $options: 'i' } },
+        { phone_number: { $regex: escapedTerm, $options: 'i' } }
       ];
+      if (/^\d+$/.test(term)) query.$or.push({ emp_no: Number(term) });
     }
 
     const collection = conn.db.collection('employees');
@@ -130,12 +132,68 @@ async function getEmployees({ search = '', department = '', division = '', statu
     const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
     const skip = (pageNum - 1) * limitNum;
 
-    const rawEmployees = await collection
-      .find(query)
-      .sort({ emp_no: 1 })
-      .skip(skip)
-      .limit(limitNum)
-      .toArray();
+    let rawEmployees;
+    if (term) {
+      const regexMatch = (field, regex) => ({
+        $regexMatch: {
+          input: {
+            $convert: {
+              input: { $ifNull: [`$${field}`, ''] },
+              to: 'string',
+              onError: '',
+              onNull: ''
+            }
+          },
+          regex,
+          options: 'i'
+        }
+      });
+      const exactMatch = field => ({
+        $eq: [
+          {
+            $toLower: {
+              $convert: {
+                input: { $ifNull: [`$${field}`, ''] },
+                to: 'string',
+                onError: '',
+                onNull: ''
+              }
+            }
+          },
+          term.toLowerCase()
+        ]
+      });
+      const rankPipeline = [
+        { $match: query },
+        {
+          $addFields: {
+            searchRank: {
+              $switch: {
+                branches: [
+                  { case: { $or: [exactMatch('emp_no'), exactMatch('employee_name')] }, then: 0 },
+                  { case: regexMatch('emp_no', `^${escapedTerm}`), then: 1 },
+                  { case: regexMatch('employee_name', `^${escapedTerm}`), then: 2 },
+                  { case: regexMatch('employee_name', `(?:^|\\s)${escapedTerm}`), then: 3 }
+                ],
+                default: 4
+              }
+            }
+          }
+        },
+        { $sort: { searchRank: 1, emp_no: 1 } },
+        { $skip: skip },
+        { $limit: limitNum },
+        { $project: { searchRank: 0 } }
+      ];
+      rawEmployees = await collection.aggregate(rankPipeline).toArray();
+    } else {
+      rawEmployees = await collection
+        .find(query)
+        .sort({ emp_no: 1 })
+        .skip(skip)
+        .limit(limitNum)
+        .toArray();
+    }
 
     const employees = rawEmployees.map(e => {
       const deptName = (e.department_id && deptMap[e.department_id.toString()]) || 'General';
@@ -151,6 +209,10 @@ async function getEmployees({ search = '', department = '', division = '', statu
         department: deptName,
         division: divName,
         is_active: e.is_active !== false,
+        has_photo: Boolean(getEmployeePhotoValue(e)),
+        photo: getEmployeePhotoValue(e)
+          ? `/api/hrms/employees/${encodeURIComponent(e.emp_no)}/photo`
+          : null,
         source: 'HRMS Database (Direct Live Fetch)'
       };
     });
@@ -171,6 +233,42 @@ async function getEmployees({ search = '', department = '', division = '', statu
     };
   } catch (err) {
     console.error('Error fetching HRMS employees:', err.message);
+    throw err;
+  }
+}
+
+function getEmployeePhotoValue(employee) {
+  const knownPhoto = employee?.employee_photo ||
+    employee?.employee_image ||
+    employee?.profile_photo ||
+    employee?.profilePhoto ||
+    employee?.profile_image ||
+    employee?.photo ||
+    employee?.image ||
+    employee?.photo_url ||
+    employee?.image_url ||
+    employee?.avatar ||
+    employee?.picture ||
+    null;
+  if (knownPhoto) return knownPhoto;
+  const photoEntry = Object.entries(employee || {}).find(([key, value]) =>
+    /(photo|image|picture|avatar|pic|photograph)(url|data|base64)?$/i.test(key.replace(/[_\-\s]/g, '')) && value
+  );
+  return photoEntry?.[1] || null;
+}
+
+async function getEmployeePhoto(empNo) {
+  try {
+    const conn = getHrmsConnection();
+    await conn.asPromise();
+    const employeeNumber = String(empNo).trim();
+    const employeeQuery = /^\d+$/.test(employeeNumber)
+      ? { $or: [{ emp_no: employeeNumber }, { emp_no: Number(employeeNumber) }] }
+      : { emp_no: employeeNumber };
+    const employee = await conn.db.collection('employees').findOne(employeeQuery);
+    return getEmployeePhotoValue(employee);
+  } catch (err) {
+    console.error('Error fetching HRMS employee photo:', err.message);
     throw err;
   }
 }
@@ -202,6 +300,10 @@ async function getEmployeeByEmpNo(empNo) {
       department: deptName,
       division: divName,
       is_active: employee.is_active !== false,
+      has_photo: Boolean(getEmployeePhotoValue(employee)),
+      photo: getEmployeePhotoValue(employee)
+        ? `/api/hrms/employees/${encodeURIComponent(employee.emp_no)}/photo`
+        : null,
       source: 'HRMS Database'
     };
   } catch (err) {
@@ -309,5 +411,6 @@ module.exports = {
   getEmployees,
   getDepartments,
   getDivisions,
-  getEmployeeByEmpNo
+  getEmployeeByEmpNo,
+  getEmployeePhoto
 };

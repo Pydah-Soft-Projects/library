@@ -77,6 +77,42 @@ async function getEmployeeByEmpNo(req, res) {
   }
 }
 
+async function getEmployeePhoto(req, res) {
+  try {
+    const photo = await hrmsService.getEmployeePhoto(req.params.empNo);
+    if (!photo) {
+      return res.status(404).json({ error: 'Employee photo not found.' });
+    }
+
+    const binaryPhoto = Buffer.isBuffer(photo)
+      ? photo
+      : Buffer.isBuffer(photo?.buffer)
+        ? photo.buffer
+        : Buffer.isBuffer(photo?.data)
+          ? photo.data
+          : null;
+    if (binaryPhoto) {
+      res.type(photo?.contentType || photo?.mimetype || 'image/jpeg').send(binaryPhoto);
+      return;
+    }
+
+    const value = typeof photo === 'string'
+      ? photo.trim()
+      : typeof photo?.data === 'string' ? photo.data.trim() : '';
+    if (!value) return res.status(404).json({ error: 'Employee photo format is not supported.' });
+    if (/^https?:\/\//i.test(value)) {
+      return res.redirect(302, value);
+    }
+    const dataUrl = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/s);
+    const contentType = dataUrl?.[1] || photo?.contentType || photo?.mimetype || 'image/jpeg';
+    const base64 = dataUrl ? dataUrl[2] : value;
+    res.type(contentType).send(Buffer.from(base64, 'base64'));
+  } catch (err) {
+    console.error('HRMS getEmployeePhoto controller error:', err.message);
+    res.status(500).json({ error: 'Failed to retrieve employee photo.' });
+  }
+}
+
 async function getDivisions(req, res) {
   try {
     const divisions = await hrmsService.getDivisions();
@@ -94,5 +130,6 @@ module.exports = {
   getEmployees,
   getDepartments,
   getDivisions,
-  getEmployeeByEmpNo
+  getEmployeeByEmpNo,
+  getEmployeePhoto
 };

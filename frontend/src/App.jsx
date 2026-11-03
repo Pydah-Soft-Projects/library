@@ -627,6 +627,7 @@ export default function App() {
     if (barcodeOrPayload && typeof barcodeOrPayload === 'object' && Array.isArray(barcodeOrPayload.books) && barcodeOrPayload.books.length > 0) {
       const booksList = barcodeOrPayload.books;
       const patronId = barcodeOrPayload.patronId || barcodeOrPayload.studentPin || barcodeOrPayload.rollNo;
+      const patronType = barcodeOrPayload.patronType || 'student';
       const dueDateParam = barcodeOrPayload.manualDueDate || barcodeOrPayload.dueDate;
       const finalPatronName = barcodeOrPayload.patronName || `Patron #${patronId}`;
       const finalDept = barcodeOrPayload.department || 'General';
@@ -639,17 +640,19 @@ export default function App() {
             ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
           },
           body: JSON.stringify({ 
-            barcodes: booksList.map(b => b.barcode || b.accession), 
+            barcodes: booksList.map(b => b.selectedCopy?.barcode || b.selectedCopy?.accession || b.barcode || b.accession),
             patron_id: patronId, 
+            patron_type: patronType,
             patron_name: finalPatronName,
             department: finalDept,
-            due_date: dueDateParam 
+            due_date: dueDateParam,
+            loan_days: barcodeOrPayload.durationDays
           })
         });
         const data = await res.json();
         if (!res.ok) {
           addToast(data.error || 'Failed to issue books.', 'danger');
-          return;
+          return null;
         }
 
         const newLoans = data.loans || (data.loan ? [data.loan] : []);
@@ -661,29 +664,50 @@ export default function App() {
 
         // Decrement stock for each issued book
         setBooks(prev => {
-          const issuedBarcodes = new Set(booksList.map(b => String(b.barcode || b.accession).toLowerCase()));
+          const issuedByBook = new Map();
+          booksList.forEach(issuedBook => {
+            const bookId = String(issuedBook.id || issuedBook._id || '');
+            const copyNumber = String(issuedBook.selectedCopy?.accession || issuedBook.accession || '').toLowerCase();
+            if (!bookId) return;
+            const entry = issuedByBook.get(bookId) || { count: 0, copyNumbers: new Set() };
+            entry.count += 1;
+            entry.copyNumbers.add(copyNumber);
+            issuedByBook.set(bookId, entry);
+          });
           return prev.map(b => {
-            const bCode = String(b.barcode || b.accession || '').toLowerCase();
-            if (issuedBarcodes.has(bCode)) {
-              return { ...b, available: Math.max((b.available !== undefined ? b.available : 1) - 1, 0) };
-            }
-            return b;
+            const entry = issuedByBook.get(String(b.id || b._id || ''));
+            if (!entry) return b;
+            const copiesDetail = Array.isArray(b.copies_detail)
+              ? b.copies_detail.map(copy =>
+                  entry.copyNumbers.has(String(copy.accession || '').toLowerCase()) ||
+                  entry.copyNumbers.has(String(copy.barcode || '').toLowerCase())
+                    ? { ...copy, status: 'Borrowed' }
+                    : copy
+                )
+              : b.copies_detail;
+            return {
+              ...b,
+              available: Math.max(Number(b.available ?? b.total ?? 1) - entry.count, 0),
+              ...(copiesDetail ? { copies_detail: copiesDetail } : {})
+            };
           });
         });
 
         // Increment student borrowed count
-        setStudents(prev => prev.map(s => {
-          if (s.id === patronId || s.rollNo === patronId || s.pin_no === patronId) {
-            return { ...s, borrowedCount: (s.borrowedCount || 0) + booksList.length };
-          }
-          return s;
-        }));
+        if (patronType === 'student') {
+          setStudents(prev => prev.map(s => {
+            if (s.id === patronId || s.rollNo === patronId || s.pin_no === patronId) {
+              return { ...s, borrowedCount: (s.borrowedCount || 0) + booksList.length };
+            }
+            return s;
+          }));
+        }
 
         addToast(data.message || `Successfully issued ${booksList.length} books to ${finalPatronName}.`, 'success');
         return data;
       } catch (err) {
         addToast('Failed to issue books: ' + err.message, 'danger');
-        return;
+        return null;
       }
     }
 
@@ -762,6 +786,7 @@ export default function App() {
         body: JSON.stringify({ 
           barcode: targetBook.barcode || targetBook.accession || barcode, 
           patron_id: finalPatronId, 
+          patron_type: barcodeOrPayload?.patronType || 'student',
           patron_name: finalPatronName,
           department: finalDept,
           due_date: dueDateParam 
@@ -944,6 +969,49 @@ export default function App() {
 
     addToast(`Book "${targetLoan.bookTitle}" returned to stock. Reshelve at: ${targetBook?.shelf || 'Central Stack'}`, 'success');
     addAuditLog(`RETURN: "${targetLoan.bookTitle}" returned by ${targetLoan.patronName} on ${retDateFormatted}. Copy restored to shelf.`);
+  };
+
+  const handleManualReturnBook = async manualReturn => {
+    const response = await fetch('/api/circulation/manual-return', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        barcode: manualReturn.barcode,
+        accession: manualReturn.accession,
+        patron_id: manualReturn.patronId,
+        patron_type: manualReturn.patronType,
+        patron_name: manualReturn.patronName,
+        department: manualReturn.department,
+        issue_date: manualReturn.issueDate,
+        due_date: manualReturn.dueDate
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Manual return failed.');
+    if (!data.loan || !data.book) throw new Error('Manual return response was incomplete.');
+
+    setLoans(prev => {
+      const updated = [data.loan, ...prev.filter(loan => String(loan.id || loan._id) !== String(data.loan.id))];
+      try { localStorage.setItem('lm_loans', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+    setBooks(prev => prev.map(book => {
+      const isSameBook = String(book.id || book._id) === String(data.book.id) ||
+        book.accession === data.book.accession ||
+        book.barcode === data.book.barcode;
+      return isSameBook
+        ? {
+            ...book,
+            available: data.book.available,
+            total: data.book.total,
+            copies_detail: data.book.copies_detail || book.copies_detail
+          }
+        : book;
+    }));
+    addToast(`"${data.loan.bookTitle}" recorded as returned by ${data.loan.patronName}.`, 'success');
+    return data.loan;
   };
 
   // Real Loan Renewal (+15 Days Extension)
@@ -1164,6 +1232,44 @@ export default function App() {
     }
   };
 
+  const refreshBooksAndLoans = async () => {
+    try {
+      const [booksResponse, loansResponse] = await Promise.all([
+        fetch('/api/books'),
+        fetch('/api/circulation/loans')
+      ]);
+      if (!booksResponse.ok || !loansResponse.ok) {
+        throw new Error('Could not reload the latest books and circulation data.');
+      }
+
+      const [booksData, loansData] = await Promise.all([
+        booksResponse.json(),
+        loansResponse.json()
+      ]);
+      if (Array.isArray(booksData.books)) {
+        const freshBooks = booksData.books.map(book => ({
+          ...book,
+          id: book.id || book._id,
+          _id: book._id || book.id
+        }));
+        setBooks(freshBooks);
+      }
+      if (Array.isArray(loansData.loans)) {
+        const seen = new Set();
+        const freshLoans = loansData.loans.filter(loan => {
+          const key = String(loan.id || loan._id || `${loan.accession}-${loan.patronId}-${loan.issue_date}`);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        setLoans(freshLoans);
+      }
+    } catch (error) {
+      console.error('Failed to refresh catalog data during pagination:', error);
+      addToast(error.message || 'Failed to reload the latest catalog data.', 'danger');
+    }
+  };
+
   // Bulk Import Circulations (Issues & Returns Spreadsheet) via REST API
   const handleBulkImportCirculations = async (circulationsArray) => {
     try {
@@ -1185,10 +1291,8 @@ export default function App() {
         throw new Error(data.error || 'Bulk circulation import failed');
       }
     } catch (err) {
-      setLoans(prev => [...circulationsArray, ...prev]);
-      addToast(`Imported ${circulationsArray.length} circulation records to desk.`, 'success');
-      addAuditLog(`BULK CIRCULATION IMPORT: Staged ${circulationsArray.length} loan records.`);
-      return { success: true, count: circulationsArray.length };
+      console.error('Bulk circulation import failed:', err);
+      throw err;
     }
   };
 
@@ -1437,6 +1541,7 @@ export default function App() {
               auditLogs={auditLogs}
               hrmsUsersCount={hrmsUsersCount}
               onNavigate={setCurrentTab}
+              onOpenReturns={() => setCurrentTab('admin_fines')}
               onOpenUpiModal={(fine) => setSelectedFineForUpi(fine)}
               onOpenWaiveModal={(fine) => setSelectedFineForWaive(fine)}
             />
@@ -1458,6 +1563,7 @@ export default function App() {
             <AllBooksView
               books={books}
               loans={loans}
+              onRefresh={refreshBooksAndLoans}
               onUpdateBook={handleUpdateBook}
               onDeleteBook={handleDeleteBook}
               onSelectIssue={(book) => {
@@ -1481,6 +1587,7 @@ export default function App() {
               onBulkImportCirculations={handleBulkImportCirculations}
               onIssueBook={handleIssueBook}
               onReturnBook={handleReturnBook}
+              onManualReturnBook={handleManualReturnBook}
               onRenewLoan={handleRenewLoan}
               onCollectCash={handleCollectCash}
               onOpenUpiModal={(fine) => setSelectedFineForUpi(fine)}
