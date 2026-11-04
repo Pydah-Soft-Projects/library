@@ -52,28 +52,45 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-50 flex flex-col items-center justify-center p-4 sm:p-6 select-none font-sans">
+    <div 
+      className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 select-none font-sans transition-colors duration-200"
+      style={{ backgroundColor: 'var(--background)', color: 'var(--text-primary)' }}
+    >
       <div className="w-full max-w-md">
-        <div className="bg-white border border-zinc-200/90 rounded-2xl shadow-sm p-8 sm:p-10 space-y-6">
+        <div 
+          className="border rounded-2xl shadow-sm p-8 sm:p-10 space-y-6 transition-colors duration-200"
+          style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
+        >
           {onBack && (
             <button
               type="button"
               onClick={onBack}
-              className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-900 font-medium transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 text-xs font-medium transition-colors cursor-pointer hover:opacity-80"
+              style={{ color: 'var(--text-secondary)' }}
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back to Portal Home</span>
             </button>
           )}
+
           {/* Header */}
           <div className="text-center space-y-2">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 text-white shadow-xs mb-1">
+            <div 
+              className="inline-flex items-center justify-center w-12 h-12 rounded-xl text-white shadow-xs mb-1 transition-colors duration-200"
+              style={{ backgroundColor: 'var(--primary)' }}
+            >
               <BookOpen className="w-6 h-6" />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-zinc-900">
+            <h1 
+              className="text-2xl font-bold tracking-tight"
+              style={{ color: 'var(--text-primary)' }}
+            >
               Campus Library
             </h1>
-            <p className="text-xs text-zinc-500 leading-relaxed">
+            <p 
+              className="text-xs leading-relaxed"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               Sign in with your HRMS employee ID or administrative credentials
             </p>
           </div>
@@ -90,11 +107,14 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
           <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs">
             {/* Username / Employee ID / Email */}
             <div className="space-y-1.5">
-              <label className="block font-semibold text-zinc-700 uppercase tracking-wider text-[11px]">
+              <label 
+                className="block font-semibold uppercase tracking-wider text-[11px]"
+                style={{ color: 'var(--text-primary)' }}
+              >
                 HRMS Employee ID / Username
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
                 <input
                   type="text"
                   required
@@ -102,7 +122,12 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   placeholder="e.g. 2145 or superadmin"
-                  className="w-full pl-10 pr-3.5 py-2.5 border border-zinc-200 rounded-xl text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 transition-colors"
+                  className="w-full pl-10 pr-3.5 py-2.5 border rounded-xl text-xs transition-colors focus:outline-none"
+                  style={{ 
+                    backgroundColor: 'var(--surface)', 
+                    borderColor: 'var(--border-strong)', 
+                    color: 'var(--text-primary)' 
+                  }}
                 />
               </div>
             </div>
@@ -110,24 +135,33 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
             {/* Password */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="block font-semibold text-zinc-700 uppercase tracking-wider text-[11px]">
+                <label 
+                  className="block font-semibold uppercase tracking-wider text-[11px]"
+                  style={{ color: 'var(--text-primary)' }}
+                >
                   Password
                 </label>
               </div>
               <div className="relative">
-                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full pl-10 pr-10 py-2.5 border border-zinc-200 rounded-xl text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-blue-600 transition-colors"
+                  className="w-full pl-10 pr-10 py-2.5 border rounded-xl text-xs transition-colors focus:outline-none"
+                  style={{ 
+                    backgroundColor: 'var(--surface)', 
+                    borderColor: 'var(--border-strong)', 
+                    color: 'var(--text-primary)' 
+                  }}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 p-1 cursor-pointer"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 cursor-pointer"
+                  style={{ color: 'var(--text-muted)' }}
                   tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -139,7 +173,8 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-medium text-xs transition-colors flex items-center justify-center gap-2 shadow-xs mt-3 cursor-pointer"
+              className="w-full py-2.5 px-4 text-white rounded-xl font-medium text-xs transition-colors flex items-center justify-center gap-2 shadow-xs mt-3 cursor-pointer hover:opacity-90 disabled:opacity-50"
+              style={{ backgroundColor: 'var(--primary)' }}
             >
               {isLoading ? (
                 <>
@@ -156,8 +191,11 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
           </form>
 
           {/* Clean Footer Info */}
-          <div className="pt-4 border-t border-zinc-100 flex items-center justify-center gap-1.5 text-[11px] text-zinc-400 text-center">
-            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
+          <div 
+            className="pt-4 border-t flex items-center justify-center gap-1.5 text-[11px] text-center"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
             <span>Institutional Management Portal • Secured with Live HRMS & JWT</span>
           </div>
         </div>

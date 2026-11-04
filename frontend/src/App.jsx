@@ -1505,7 +1505,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-white text-zinc-900 flex font-sans">
+    <div className="min-h-screen flex font-sans transition-colors duration-200" style={{ backgroundColor: 'var(--background)', color: 'var(--text-primary)' }}>
       {/* Minimal Collapsible Sidebar Navigation */}
       <Sidebar
         currentTab={currentTab}
@@ -1528,6 +1528,7 @@ export default function App() {
         className={`flex-1 flex flex-col min-h-screen transition-all duration-200 ease-in-out ${
           isSidebarCollapsed ? 'pl-20' : 'pl-64'
         }`}
+        style={{ backgroundColor: 'var(--background)', color: 'var(--text-primary)' }}
       >
         {/* Dynamic Main Views - Flat, Minimalist & Full-Width */}
         <main className="flex-1 p-6 sm:p-8 w-full">

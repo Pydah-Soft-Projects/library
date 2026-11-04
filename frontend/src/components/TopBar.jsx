@@ -1,14 +1,11 @@
 import React from 'react';
-import { Menu, Clock, Bell, User, BookOpen, ShieldCheck, LogOut } from 'lucide-react';
+import { Menu, Clock, Bell, BookOpen, ShieldCheck, LogOut } from 'lucide-react';
 
 export default function TopBar({ 
   currentTab, 
-  currentRole, 
   isCollapsed, 
   setIsCollapsed, 
   totalPendingFines,
-  currentStudentId,
-  setCurrentStudentId,
   authToken,
   currentUser,
   onOpenJwtModal,
@@ -41,13 +38,20 @@ export default function TopBar({
   const currentInfo = tabTitles[currentTab] || { title: 'Campus Library', subtitle: 'Central Library Management System' };
 
   return (
-    <header className="sticky top-0 z-30 bg-white border-b border-zinc-200 px-4 sm:px-6 lg:px-8 py-3 transition-colors">
+    <header 
+      className="sticky top-0 z-30 border-b px-4 sm:px-6 lg:px-8 py-3 transition-colors duration-200 backdrop-blur-md"
+      style={{ 
+        backgroundColor: 'var(--navbar, var(--surface))', 
+        borderColor: 'var(--border)' 
+      }}
+    >
       <div className="flex items-center justify-between gap-4">
         {/* Left: Sidebar Toggle & Page Title */}
         <div className="flex items-center gap-3">
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-2 rounded-xl text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition-colors cursor-pointer"
+            className="p-2 rounded-xl transition-colors cursor-pointer hover:opacity-80"
+            style={{ color: 'var(--text-secondary)' }}
             title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             <Menu className="w-4 h-4" />
@@ -55,15 +59,28 @@ export default function TopBar({
 
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="font-bold text-base sm:text-lg text-zinc-900 tracking-tight leading-none">
+              <h1 
+                className="font-bold text-base sm:text-lg tracking-tight leading-none"
+                style={{ color: 'var(--text-primary)' }}
+              >
                 {currentInfo.title}
               </h1>
-              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+              <span 
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border"
+                style={{ 
+                  backgroundColor: 'var(--primary-light)', 
+                  color: 'var(--primary)', 
+                  borderColor: 'var(--border)' 
+                }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--primary)' }} />
                 Live
               </span>
             </div>
-            <p className="text-[11px] text-zinc-500 mt-0.5 hidden sm:block">
+            <p 
+              className="text-[11px] mt-0.5 hidden sm:block"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               {currentInfo.subtitle}
             </p>
           </div>
@@ -72,8 +89,15 @@ export default function TopBar({
         {/* Right: Policy Pill, Overdue Alert, User Profile, Session */}
         <div className="flex items-center gap-2.5">
           {/* Subtle Lending Rule Pill */}
-          <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-zinc-50 border border-zinc-200 text-zinc-600 text-[11px] font-medium">
-            <Clock className="w-3.5 h-3.5 text-zinc-400" />
+          <div 
+            className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-medium"
+            style={{ 
+              backgroundColor: 'var(--surface)', 
+              borderColor: 'var(--border)', 
+              color: 'var(--text-secondary)' 
+            }}
+          >
+            <Clock className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
             <span>30-Day Loan Window • ₹5/Day</span>
           </div>
 
@@ -91,15 +115,30 @@ export default function TopBar({
 
           {/* User Profile Card */}
           {currentUser && (
-            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-zinc-50 border border-zinc-200">
-              <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
+            <div 
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl border"
+              style={{ 
+                backgroundColor: 'var(--surface)', 
+                borderColor: 'var(--border)' 
+              }}
+            >
+              <div 
+                className="w-7 h-7 rounded-lg text-white flex items-center justify-center text-xs font-bold shrink-0"
+                style={{ backgroundColor: 'var(--primary)' }}
+              >
                 {(currentUser.full_name || currentUser.name || 'U').charAt(0).toUpperCase()}
               </div>
               <div className="text-left hidden sm:block">
-                <div className="text-xs font-bold text-zinc-900 leading-tight truncate max-w-[140px]">
+                <div 
+                  className="text-xs font-bold leading-tight truncate max-w-[140px]"
+                  style={{ color: 'var(--text-primary)' }}
+                >
                   {currentUser.full_name || currentUser.name}
                 </div>
-                <div className="text-[10px] text-zinc-500 font-mono leading-none mt-0.5 truncate max-w-[140px]">
+                <div 
+                  className="text-[10px] font-mono leading-none mt-0.5 truncate max-w-[140px]"
+                  style={{ color: 'var(--text-muted)' }}
+                >
                   {currentUser.role || 'Staff'} • {currentUser.patron_id || currentUser.email}
                 </div>
               </div>
@@ -111,10 +150,15 @@ export default function TopBar({
             <button
               type="button"
               onClick={onOpenJwtModal}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-zinc-200 bg-white hover:bg-blue-50 text-zinc-700 hover:text-blue-700 text-xs font-medium transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-medium transition-colors cursor-pointer hover:opacity-80"
+              style={{ 
+                backgroundColor: 'var(--surface)', 
+                borderColor: 'var(--border)', 
+                color: 'var(--text-secondary)' 
+              }}
               title="View JWT Security Claims"
             >
-              <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+              <ShieldCheck className="w-3.5 h-3.5" style={{ color: 'var(--primary)' }} />
               <span className="hidden md:inline font-semibold">JWT</span>
             </button>
           )}
@@ -124,7 +168,11 @@ export default function TopBar({
             <button
               type="button"
               onClick={onLogout}
-              className="p-2 rounded-xl border border-zinc-200 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600 text-zinc-500 transition-colors"
+              className="p-2 rounded-xl border hover:opacity-80 transition-colors"
+              style={{ 
+                borderColor: 'var(--border)', 
+                color: 'var(--text-secondary)' 
+              }}
               title="Log Out Session"
             >
               <LogOut className="w-4 h-4" />

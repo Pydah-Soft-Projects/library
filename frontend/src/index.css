@@ -166,9 +166,66 @@
   --color-cyan-800: #155e75;
   --color-cyan-900: #164e63;
   --color-cyan-950: #083344;
+
+  /* Centralized Runtime Theme Mappings */
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-light: var(--primary-light);
+  --color-secondary: var(--secondary);
+  --color-accent: var(--accent);
+  --color-surface: var(--surface);
+  --color-background: var(--background);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text-main: var(--text-primary);
+  --color-text-sub: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-text: var(--sidebar-text);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-navbar: var(--navbar);
 }
 
 :root {
+  /* Master Central Theme Tokens (Fallback when offline / unhydrated) */
+  --primary: #1E3A8A;
+  --primary-hover: #172554;
+  --primary-light: #EFF6FF;
+  --primary-rgb: 30, 58, 138;
+  --secondary: #2563EB;
+  --secondary-rgb: 37, 99, 235;
+  --accent: #0284C7;
+  --primary-50: #eff6ff;
+  --primary-100: #dbeafe;
+  --primary-200: #bfdbfe;
+  --primary-300: #93c5fd;
+  --primary-400: #60a5fa;
+  --primary-500: #3b82f6;
+  --primary-600: #2563eb;
+  --primary-700: #1d4ed8;
+  --primary-800: #1e40af;
+  --primary-900: #1e3a8a;
+  --background: #F8FAFC;
+  --surface: #FFFFFF;
+  --sidebar: #0F172A;
+  --sidebar-text: #F8FAFC;
+  --sidebar-muted: #94A3B8;
+  --navbar: #FFFFFF;
+  --navbar-border: #E2E8F0;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --border: #E2E8F0;
+  --border-strong: #CBD5E1;
+  --success: #16A34A;
+  --warning: #D97706;
+  --danger: #DC2626;
+  --info: #2563EB;
+
   /* Direct root hex fallbacks for older browsers / Windows 7 Chrome <= 109 */
   --color-blue-50: #eff6ff;
   --color-blue-100: #dbeafe;
@@ -246,8 +303,8 @@
 
 @layer base {
   html, body {
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: var(--background, #f8fafc);
+    color: var(--text-primary, #0f172a);
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   }
 }
@@ -263,4 +320,47 @@
   background-color: #2563eb;
   border-radius: 50%;
   display: inline-block;
+}
+
+/* Theme Bridge: Connects all component utility classes directly to Central Theme tokens */
+@layer utilities {
+  .bg-white {
+    background-color: var(--surface);
+  }
+  .bg-slate-50, .bg-zinc-50 {
+    background-color: var(--background);
+  }
+  .border-zinc-200, .border-slate-200, .border-zinc-100, .border-slate-100 {
+    border-color: var(--border);
+  }
+  .border-zinc-300, .border-slate-300 {
+    border-color: var(--border-strong);
+  }
+  .text-zinc-900, .text-zinc-950, .text-slate-900, .text-slate-800 {
+    color: var(--text-primary);
+  }
+  .text-zinc-700, .text-zinc-600, .text-slate-700, .text-slate-600 {
+    color: var(--text-secondary);
+  }
+  .text-zinc-500, .text-zinc-400, .text-slate-500, .text-slate-400 {
+    color: var(--text-muted);
+  }
+  .bg-blue-600 {
+    background-color: var(--primary);
+  }
+  .hover\:bg-blue-700:hover {
+    background-color: var(--primary-hover);
+  }
+  .text-blue-600, .text-blue-700 {
+    color: var(--primary);
+  }
+  .border-blue-600, .border-blue-200 {
+    border-color: var(--primary);
+  }
+  .bg-blue-50, .bg-blue-100 {
+    background-color: var(--primary-light);
+  }
+  .text-blue-800, .text-blue-900 {
+    color: var(--primary);
+  }
 }

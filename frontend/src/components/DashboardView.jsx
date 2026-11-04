@@ -1,7 +1,5 @@
 import React from 'react';
-import { 
-  Plus, ArrowLeftRight
-} from 'lucide-react';
+import { Plus, ArrowLeftRight } from 'lucide-react';
 
 export default function DashboardView({
   books = [],
@@ -41,8 +39,6 @@ export default function DashboardView({
   });
   const unpaidFines = fines.filter(f => f.status === 'Unpaid' || f.status === 'Pending');
   const totalFineAmount = unpaidFines.reduce((sum, f) => sum + Number(f.amount || 0), 0);
-  const activePatrons = students.filter(s => s.status !== 'Frozen').length;
-  const frozenPatrons = students.filter(s => s.status === 'Frozen').length;
 
   const getSingleBookNumber = (raw) => {
     if (!raw) return '1';
@@ -102,12 +98,21 @@ export default function DashboardView({
   return (
     <div className="space-y-4">
       {/* Main Heading Only & Quick Action Buttons */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-200">
+      <div 
+        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b"
+        style={{ borderColor: 'var(--border)' }}
+      >
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-950">
+          <h1 
+            className="text-2xl font-bold tracking-tight"
+            style={{ color: 'var(--text-primary)' }}
+          >
             Dashboard
           </h1>
-          <p className="text-xs text-zinc-600 mt-1">
+          <p 
+            className="text-xs mt-1"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             Real-time library holdings, circulation desk volume, and member accounts
           </p>
         </div>
@@ -115,16 +120,22 @@ export default function DashboardView({
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <button
             onClick={() => onNavigate('book_creation')}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer hover:opacity-90"
+            style={{ backgroundColor: 'var(--primary)' }}
           >
             <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>Create Book</span>
           </button>
           <button
             onClick={() => onNavigate('book_issues_returns')}
-            className="px-3 py-1.5 border border-blue-600 text-blue-600 hover:bg-blue-50 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 border text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+            style={{ 
+              borderColor: 'var(--primary)', 
+              color: 'var(--primary)',
+              backgroundColor: 'var(--surface)' 
+            }}
           >
-            <ArrowLeftRight className="w-3.5 h-3.5 stroke-[2.5] text-blue-600" />
+            <ArrowLeftRight className="w-3.5 h-3.5 stroke-[2.5]" style={{ color: 'var(--primary)' }} />
             <span>Issues & Returns</span>
           </button>
         </div>
@@ -136,15 +147,30 @@ export default function DashboardView({
           <div
             key={i}
             onClick={() => onNavigate(m.tab)}
-            className="min-w-0 p-3 rounded-lg border border-zinc-200 bg-white cursor-pointer hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+            className="min-w-0 p-3 rounded-lg border cursor-pointer transition-colors hover:opacity-95"
+            style={{ 
+              backgroundColor: 'var(--surface)', 
+              borderColor: 'var(--border)' 
+            }}
           >
-            <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide block mb-1">
+            <span 
+              className="text-[10px] font-semibold uppercase tracking-wide block mb-1"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               {m.label}
             </span>
-            <div className={`text-2xl font-bold tracking-tight ${m.highlight ? 'text-rose-700' : 'text-zinc-950'}`}>
+            <div 
+              className="text-2xl font-bold tracking-tight"
+              style={{ color: m.highlight ? 'var(--danger)' : 'var(--text-primary)' }}
+            >
               {m.value}
             </div>
-            <span className="text-[10px] text-zinc-500 mt-1 block leading-snug">{m.sub}</span>
+            <span 
+              className="text-[10px] mt-1 block leading-snug"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              {m.sub}
+            </span>
           </div>
         ))}
       </div>
@@ -154,17 +180,43 @@ export default function DashboardView({
           { title: 'Due Today', loans: dueTodayLoans, tone: 'blue' },
           { title: 'Past Due', loans: overdueLoans, tone: 'rose' }
         ].map(queue => (
-          <section key={queue.title} className="min-w-0 rounded-lg border border-zinc-200 bg-white overflow-hidden">
-            <div className="px-3 py-2 flex items-center justify-between border-b border-zinc-100">
-              <h2 className="text-xs font-semibold text-zinc-800">{queue.title}</h2>
-              <span className={`text-[11px] font-semibold ${queue.tone === 'rose' ? 'text-rose-700' : 'text-blue-700'}`}>
+          <section 
+            key={queue.title} 
+            className="min-w-0 rounded-lg border overflow-hidden"
+            style={{ 
+              backgroundColor: 'var(--surface)', 
+              borderColor: 'var(--border)' 
+            }}
+          >
+            <div 
+              className="px-3 py-2 flex items-center justify-between border-b"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <h2 
+                className="text-xs font-semibold"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                {queue.title}
+              </h2>
+              <span 
+                className="text-[11px] font-semibold"
+                style={{ color: queue.tone === 'rose' ? 'var(--danger)' : 'var(--primary)' }}
+              >
                 {queue.loans.length}
               </span>
             </div>
             {queue.loans.length === 0 ? (
-              <p className="px-3 py-4 text-xs text-zinc-500">No books in this return queue.</p>
+              <p 
+                className="px-3 py-4 text-xs"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                No books in this return queue.
+              </p>
             ) : (
-              <div className="max-h-80 overflow-y-auto divide-y divide-zinc-100">
+              <div 
+                className="max-h-80 overflow-y-auto divide-y"
+                style={{ borderColor: 'var(--border)' }}
+              >
                 {queue.loans.map((loan, index) => {
                   const borrowerName = loan.patronName || loan.patron_name || 'Unknown borrower';
                   const dueDate = loan.dueDateFormatted || loan.dueDate || loan.due_date || '—';
@@ -172,24 +224,51 @@ export default function DashboardView({
                   const bookTitle = loan.bookTitle || loan.book_title || 'Unknown book';
                   const isPastDue = queue.tone === 'rose';
                   return (
-                    <div key={loan.id || loan._id || `${loan.patronId || loan.patron_id}-${loan.accession || index}`} className="px-3 py-2.5 flex items-center justify-between gap-3 hover:bg-zinc-50">
+                    <div 
+                      key={loan.id || loan._id || `${loan.patronId || loan.patron_id}-${loan.accession || index}`} 
+                      className="px-3 py-2.5 flex items-center justify-between gap-3 hover:opacity-90"
+                      style={{ borderBottomColor: 'var(--border)' }}
+                    >
                       <div className="min-w-0">
                         {isPastDue ? (
                           <>
                             <div className="flex items-baseline justify-between gap-3">
-                              <div className="text-xs font-bold text-zinc-900 truncate">{borrowerName}</div>
-                              <div className="shrink-0 text-[11px] font-semibold text-rose-700">Due: {dueDate}</div>
+                              <div 
+                                className="text-xs font-bold truncate"
+                                style={{ color: 'var(--text-primary)' }}
+                              >
+                                {borrowerName}
+                              </div>
+                              <div 
+                                className="shrink-0 text-[11px] font-semibold"
+                                style={{ color: 'var(--danger)' }}
+                              >
+                                Due: {dueDate}
+                              </div>
                             </div>
-                            <div className="mt-0.5 text-[11px] text-zinc-500 truncate">{bookTitle} <span className="mx-1 text-zinc-300">•</span> <span className="font-mono">#{bookNumber}</span></div>
+                            <div 
+                              className="mt-0.5 text-[11px] truncate"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              {bookTitle} <span className="mx-1" style={{ color: 'var(--border)' }}>•</span> <span className="font-mono">#{bookNumber}</span>
+                            </div>
                           </>
                         ) : (
                           <>
-                            <div className="text-xs font-semibold text-zinc-900 truncate">{bookTitle}</div>
-                            <div className="mt-0.5 text-[11px] text-zinc-500 truncate">
+                            <div 
+                              className="text-xs font-semibold truncate"
+                              style={{ color: 'var(--text-primary)' }}
+                            >
+                              {bookTitle}
+                            </div>
+                            <div 
+                              className="mt-0.5 text-[11px] truncate"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
                               {borrowerName}
-                              <span className="mx-1.5 text-zinc-300">•</span>
+                              <span className="mx-1.5" style={{ color: 'var(--border)' }}>•</span>
                               <span className="font-mono">#{bookNumber}</span>
-                              <span className="mx-1.5 text-zinc-300">•</span>
+                              <span className="mx-1.5" style={{ color: 'var(--border)' }}>•</span>
                               Due {dueDate}
                             </div>
                           </>
@@ -198,7 +277,12 @@ export default function DashboardView({
                       <button
                         type="button"
                         onClick={() => onOpenReturns ? onOpenReturns() : onNavigate('admin_fines')}
-                        className="shrink-0 rounded-md border border-blue-200 px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50"
+                        className="shrink-0 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-colors hover:opacity-80"
+                        style={{ 
+                          borderColor: 'var(--primary)', 
+                          color: 'var(--primary)',
+                          backgroundColor: 'var(--surface)' 
+                        }}
                       >
                         Return
                       </button>
@@ -210,7 +294,6 @@ export default function DashboardView({
           </section>
         ))}
       </div>
-
     </div>
   );
 }
