@@ -11,8 +11,30 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Pydah Centralized Theme Runtime Loader -->
+    <script>
+      (function() {
+        var isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        var server = isLocal ? 'http://localhost:7000' : 'https://ui-theme.pydah.edu.in';
+        var s = document.createElement('script');
+        s.src = server + '/themes/theme-loader.js';
+        s.setAttribute('data-theme-server', server);
+        s.setAttribute('data-poll-interval', isLocal ? '5' : '30');
+        s.onerror = function() {
+          if (isLocal) {
+            var fb = document.createElement('script');
+            fb.src = 'https://ui-theme.pydah.edu.in/themes/theme-loader.js';
+            fb.setAttribute('data-theme-server', 'https://ui-theme.pydah.edu.in');
+            fb.setAttribute('data-poll-interval', '30');
+            document.head.appendChild(fb);
+          }
+        };
+        document.head.appendChild(s);
+      })();
+    </script>
   </head>
-  <body class="bg-slate-50 text-slate-900 font-sans antialiased transition-colors duration-200">
+  <body class="font-sans antialiased transition-colors duration-200" style="background-color: var(--background, #f8fafc); color: var(--text-primary, #0f172a);">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
