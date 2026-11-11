@@ -21,12 +21,11 @@ export default function LandingView({ onNavigateToLogin }) {
       >
         {/* Logo & Portal Identity */}
         <div className="flex items-center gap-3">
-          <div 
-            className="w-10 h-10 rounded-xl flex items-center justify-center shadow-xs transition-colors duration-200"
-            style={{ backgroundColor: 'var(--primary)', color: '#ffffff' }}
-          >
-            <BookOpen className="w-5 h-5" />
-          </div>
+          <img
+            src="/campo-logos/favicon.svg"
+            alt="Campo"
+            className="w-10 h-10 rounded-xl shadow-xs shrink-0"
+          />
           <div>
             <div className="flex items-center gap-2">
               <span 

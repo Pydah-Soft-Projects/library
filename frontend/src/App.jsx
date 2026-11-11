@@ -566,7 +566,7 @@ export default function App() {
     id: 'GUEST',
     name: 'Guest Patron',
     rollNo: 'GUEST',
-    email: 'guest@pydah.edu.in',
+    email: 'guest@campo.co.in',
     department: 'General',
     status: 'Active',
     borrowedCount: 0,

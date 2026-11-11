@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { 
-  BookOpen, Lock, Mail, ArrowRight, ArrowLeft, Eye, EyeOff, 
+  Lock, Mail, ArrowRight, ArrowLeft, Eye, EyeOff, 
   AlertCircle, ShieldCheck
 } from 'lucide-react';
 
@@ -75,12 +75,11 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
 
           {/* Header */}
           <div className="text-center space-y-2">
-            <div 
-              className="inline-flex items-center justify-center w-12 h-12 rounded-xl text-white shadow-xs mb-1 transition-colors duration-200"
-              style={{ backgroundColor: 'var(--primary)' }}
-            >
-              <BookOpen className="w-6 h-6" />
-            </div>
+            <img
+              src="/campo-logos/favicon.svg"
+              alt="Campo"
+              className="w-12 h-12 rounded-xl shadow-xs mb-1 mx-auto"
+            />
             <h1 
               className="text-2xl font-bold tracking-tight"
               style={{ color: 'var(--text-primary)' }}

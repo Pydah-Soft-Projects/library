@@ -133,35 +133,27 @@ export default function Sidebar({
         >
           {!isCollapsed ? (
             <div className="flex items-center gap-3 overflow-hidden">
-              <div 
-                className="w-8 h-8 rounded-xl text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs"
-                style={{ backgroundColor: 'var(--primary)' }}
-              >
-                <BookOpen className="w-4 h-4" />
-              </div>
-              <div className="flex flex-col overflow-hidden">
-                <span 
-                  className="font-bold text-sm tracking-tight leading-none truncate"
-                  style={{ color: 'var(--sidebar-text)' }}
-                >
-                  Campus Library
-                </span>
+              <div className="flex flex-col leading-tight min-w-0">
+                <img
+                  src="/campo-logos/campo_logo_transparent_hq.png"
+                  alt="Campo"
+                  className="h-7 w-auto object-contain object-left"
+                />
                 <span 
                   className="text-[10px] font-medium truncate mt-1"
                   style={{ color: 'var(--sidebar-muted)' }}
                 >
-                  Management Console
+                  Library Management
                 </span>
               </div>
             </div>
           ) : (
-            <div 
-              className="w-8 h-8 rounded-xl text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs" 
-              title="Campus Library"
-              style={{ backgroundColor: 'var(--primary)' }}
-            >
-              <BookOpen className="w-4 h-4" />
-            </div>
+            <img
+              src="/campo-logos/favicon.svg"
+              alt="Campo"
+              title="Campo Library Management"
+              className="w-8 h-8 rounded-lg shadow-xs shrink-0"
+            />
           )}
 
           {/* Collapse Button */}

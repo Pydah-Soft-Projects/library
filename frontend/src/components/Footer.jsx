@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Clock, MapPin, ShieldCheck } from 'lucide-react';
+import { Clock, MapPin, ShieldCheck } from 'lucide-react';
 
 export default function Footer({ onSwitchTab }) {
   return (
@@ -19,12 +19,11 @@ export default function Footer({ onSwitchTab }) {
           {/* Brand */}
           <div className="space-y-2.5">
             <div className="flex items-center gap-2">
-              <div 
-                className="w-6 h-6 rounded-lg flex items-center justify-center text-white font-bold text-xs"
-                style={{ backgroundColor: 'var(--primary)' }}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-              </div>
+              <img
+                src="/campo-logos/favicon.svg"
+                alt="Campo"
+                className="w-6 h-6 rounded-lg shrink-0"
+              />
               <span 
                 className="font-bold text-sm"
                 style={{ color: 'var(--text-primary)' }}
