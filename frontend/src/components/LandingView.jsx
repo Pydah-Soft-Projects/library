@@ -22,7 +22,7 @@ export default function LandingView({ onNavigateToLogin }) {
         {/* Logo & Portal Identity */}
         <div className="flex items-center gap-3">
           <img
-            src="/campo-logos/favicon.svg"
+            src="/campo-logos/favicon.ico"
             alt="Campo"
             className="w-10 h-10 rounded-xl shadow-xs shrink-0"
           />

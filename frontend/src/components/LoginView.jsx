@@ -76,7 +76,7 @@ export default function LoginView({ onLoginSuccess, onToast, onBack }) {
           {/* Header */}
           <div className="text-center space-y-2">
             <img
-              src="/campo-logos/favicon.svg"
+              src="/campo-logos/favicon.ico"
               alt="Campo"
               className="w-12 h-12 rounded-xl shadow-xs mb-1 mx-auto"
             />

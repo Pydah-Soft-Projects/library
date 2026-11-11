@@ -20,7 +20,7 @@ export default function Footer({ onSwitchTab }) {
           <div className="space-y-2.5">
             <div className="flex items-center gap-2">
               <img
-                src="/campo-logos/favicon.svg"
+                src="/campo-logos/favicon.ico"
                 alt="Campo"
                 className="w-6 h-6 rounded-lg shrink-0"
               />

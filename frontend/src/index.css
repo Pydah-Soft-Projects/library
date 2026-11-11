@@ -211,9 +211,9 @@
   --primary-900: #1e3a8a;
   --background: #F8FAFC;
   --surface: #FFFFFF;
-  --sidebar: #0F172A;
-  --sidebar-text: #F8FAFC;
-  --sidebar-muted: #94A3B8;
+  --sidebar: #1E3150;
+  --sidebar-text: #FFFFFF;
+  --sidebar-muted: #AABBD4;
   --navbar: #FFFFFF;
   --navbar-border: #E2E8F0;
   --text-primary: #0F172A;
@@ -363,4 +363,23 @@
   .text-blue-800, .text-blue-900 {
     color: var(--primary);
   }
+}
+
+/* Custom dark scrollbar for the Campo dark sidebar */
+.custom-dark-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #2A436D transparent;
+}
+.custom-dark-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+.custom-dark-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-dark-scrollbar::-webkit-scrollbar-thumb {
+  background: #2A436D;
+  border-radius: 9999px;
+}
+.custom-dark-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #3B5B92;
 }
